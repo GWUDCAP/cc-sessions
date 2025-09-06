@@ -4,6 +4,9 @@
 # Provides comprehensive session information in a clean format
 # System-agnostic version using Python instead of jq
 
+# Configuration
+EXECUTABLE_NAME="easyfac"  # Name pattern for executable files to check
+
 # Read JSON input from stdin
 input=$(cat)
 
@@ -270,6 +273,62 @@ count_lines_of_docs() {
   echo -e "${cyan}󰈔 ${formatted_count} docs${reset}"
 }
 
+# Check executable file sizes with color
+check_executable_size() {
+  local dir="$cwd"
+  local bin_dir="$dir/bin"
+
+  if [[ ! -d "$bin_dir" ]]; then
+    echo -e "\033[38;5;242m󰜴 no bin/\033[0m"
+    return
+  fi
+
+  # Look for executables in bin/ directory
+  local executables=($(find "$bin_dir" -type f -executable -name "${EXECUTABLE_NAME}*" 2>/dev/null | sort))
+
+  if [[ ${#executables[@]} -eq 0 ]]; then
+    echo -e "\033[38;5;242m󰜴 no exec\033[0m"
+    return
+  fi
+
+  # Find the most recently modified executable
+  local latest_exec=""
+  local latest_time=0
+
+  for exec_file in "${executables[@]}"; do
+    if [[ -f "$exec_file" ]]; then
+      local mod_time=$(stat -c %Y "$exec_file" 2>/dev/null || echo "0")
+      if [[ $mod_time -gt $latest_time ]]; then
+        latest_time=$mod_time
+        latest_exec="$exec_file"
+      fi
+    fi
+  done
+
+  if [[ -n "$latest_exec" ]]; then
+    local name=$(basename "$latest_exec")
+    local size_bytes=$(stat -c %s "$latest_exec" 2>/dev/null || echo "0")
+
+    # Convert to MB with 1 decimal place
+    local size_mb=$(python3 -c "print(f'{$size_bytes / 1024 / 1024:.1f}')" 2>/dev/null || echo "0.0")
+
+    # Color based on size (typical Go binary sizes)
+    local color
+    if [[ $(python3 -c "print($size_bytes < 10 * 1024 * 1024)") == "True" ]]; then
+      color="\033[38;5;114m"  # Green for < 10MB
+    elif [[ $(python3 -c "print($size_bytes < 50 * 1024 * 1024)") == "True" ]]; then
+      color="\033[38;5;215m"  # Orange for < 50MB
+    else
+      color="\033[38;5;203m"  # Red for >= 50MB
+    fi
+
+    local reset="\033[0m"
+    echo -e "${color}󰜴 ${name} ${size_mb}MB${reset}"
+  else
+    echo -e "\033[38;5;242m󰜴 no exec\033[0m"
+  fi
+}
+
 # Build the complete statusline
 progress_info=$(calculate_context)
 task_info=$(get_current_task)
@@ -279,9 +338,10 @@ files_info=$(count_edited_files)
 tasks_info=$(count_open_tasks)
 code_info=$(count_lines_of_code)
 docs_info=$(count_lines_of_docs)
+exec_info=$(check_executable_size)
 
 # Output the complete statusline in two lines with color support
 # Line 1: Progress bar | Current task
-# Line 2: DAIC mode | Files edited | Open tasks | Lines of code | Lines of docs
+# Line 2: DAIC mode | Files edited | Open tasks | Lines of code | Lines of docs | Executable
 echo -e "$progress_info | $task_info | $git_info"
-echo -e "$daic_info | $files_info | $tasks_info | $code_info | $docs_info"
+echo -e "$daic_info | $files_info | $tasks_info | $code_info | $docs_info | $exec_info"
