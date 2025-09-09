@@ -41,7 +41,7 @@ def calculate_context(input_data: Dict[str, Any]) -> str:
         
         # Determine usable context limit (80% of theoretical before auto-compact)
         if 'Sonnet' in model_name:
-            context_limit = 160000  # 800k usable for 1M Sonnet models
+            context_limit = 160000  # 160k usable for 200k Sonnet models (many users still don't have 1M window)
         else:
             context_limit = 160000  # 160k usable for 200k models
         
