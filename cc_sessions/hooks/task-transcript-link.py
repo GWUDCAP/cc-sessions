@@ -25,7 +25,7 @@ if not transcript_path:
     sys.exit(0)
 
 # Get the transcript into memory
-with open(transcript_path, 'r') as f:
+with open(transcript_path, 'r', encoding='utf-8') as f:
     transcript = [json.loads(line) for line in f]
 
 # Remove any pre-work transcript entries
@@ -57,11 +57,14 @@ for entry in transcript:
 
 # Route the transcript
 subagent_type = 'shared'
-task_call = clean_transcript[-1]
-for block in task_call.get('content'):
-    if block.get('type') == 'tool_use' and block.get('name') == 'Task':
-        task_input = block.get('input')
-        subagent_type = task_input.get('subagent_type')
+if clean_transcript:
+    task_call = clean_transcript[-1]
+    content = task_call.get('content', [])
+    if isinstance(content, list):
+        for block in content:
+            if block.get('type') == 'tool_use' and block.get('name') == 'Task':
+                task_input = block.get('input', {})
+                subagent_type = task_input.get('subagent_type', 'shared')
 
 # Get project root using shared_state
 from shared_state import get_project_root
@@ -95,7 +98,7 @@ while clean_transcript:
 
     if batch_tokens + entry_tokens > MAX_TOKENS_PER_BATCH and transcript_batch:
         file_path = BATCH_DIR / f"current_transcript_{file_index:03}.json"
-        with file_path.open('w') as f:
+        with file_path.open('w', encoding='utf-8') as f:
             json.dump(transcript_batch, f, indent=2, ensure_ascii=False)
         file_index += 1
         transcript_batch, batch_tokens = [], 0
@@ -105,7 +108,7 @@ while clean_transcript:
 
 if transcript_batch:
     file_path = BATCH_DIR / f'current_transcript_{file_index:03}.json'
-    with file_path.open('w') as f:
+    with file_path.open('w', encoding='utf-8') as f:
         json.dump(transcript_batch, f, indent=2, ensure_ascii=False)
 
 # Allow the tool call to proceed
