@@ -97,6 +97,23 @@ if tool_name == "Bash":
     
     has_write_pattern = any(re.search(pattern, command) for pattern in write_patterns)
     
+    # Check for task management bash commands (allow these in discussion mode)
+    if has_write_pattern and check_daic_mode_bool():  # Only check if in discussion mode
+        is_task_management_bash = False
+        
+        # Check for task creation patterns
+        task_creation_patterns = [
+            r'cp\s+sessions/tasks/TEMPLATE\.md\s+sessions/tasks/',  # Copy template
+            r'mkdir\s+sessions/tasks/',  # Create task directory
+        ]
+        
+        if any(re.search(pattern, command) for pattern in task_creation_patterns):
+            is_task_management_bash = True
+        
+        if is_task_management_bash:
+            # Allow task management bash commands in discussion mode
+            sys.exit(0)
+    
     if not has_write_pattern:
         # Check if ALL commands in chain are read-only
         command_parts = re.split(r'(?:&&|\|\||;|\|)', command)
@@ -132,10 +149,25 @@ if discussion_mode and tool_name == "Bash":
         print(f"You're already in discussion mode. Be sure to propose your intended edits/plans to the user and seek their explicit approval, which will unlock implementation mode.", file=sys.stderr)
         sys.exit(2)  # Block with feedback
 
-# Block configured tools in discussion mode
+# Task management exception - allow task creation in discussion mode
 if discussion_mode and tool_name in config.get("blocked_tools", DEFAULT_CONFIG["blocked_tools"]):
-    print(f"[DAIC: Tool Blocked] You're in discussion mode. The {tool_name} tool is not allowed. You need to seek alignment first.", file=sys.stderr)
-    sys.exit(2)  # Block with feedback
+    # Check if this is a task management operation
+    is_task_management = False
+    
+    if tool_name in ["Write", "Edit", "MultiEdit"]:
+        file_path_str = tool_input.get("file_path", "")
+        if file_path_str:
+            file_path = Path(file_path_str)
+            # Allow operations on task files in sessions/tasks/ directory
+            try:
+                if "sessions" in file_path.parts and "tasks" in file_path.parts:
+                    is_task_management = True
+            except:
+                pass
+    
+    if not is_task_management:
+        print(f"[DAIC: Tool Blocked] You're in discussion mode. The {tool_name} tool is not allowed. You need to seek alignment first.", file=sys.stderr)
+        sys.exit(2)  # Block with feedback
 
 # Check if we're in a subagent context and trying to edit .claude/state files
 project_root = get_project_root()

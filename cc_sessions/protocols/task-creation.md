@@ -55,6 +55,8 @@ Default mappings:
 
 ## Creating a Task
 
+**Note**: Task creation is allowed in Discussion Mode - you can create task files without requiring implementation mode approval.
+
 1. **Copy template**:
    ```bash
    cp sessions/tasks/TEMPLATE.md sessions/tasks/[priority]-[task-name].md
