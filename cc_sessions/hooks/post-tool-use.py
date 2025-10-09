@@ -10,7 +10,6 @@ input_data = json.load(sys.stdin)
 tool_name = input_data.get("tool_name", "")
 tool_input = input_data.get("tool_input", {})
 cwd = input_data.get("cwd", "")
-mod = False
 
 # Check if we're in a subagent context
 project_root = get_project_root()
@@ -31,16 +30,20 @@ implementation_tools = ["Edit", "Write", "MultiEdit", "NotebookEdit"]
 if not discussion_mode and tool_name in implementation_tools and not in_subagent:
     # Output reminder
     print("[DAIC Reminder] When you're done implementing, run: daic", file=sys.stderr)
-    mod = True
+    # Don't set needs_feedback - avoid concurrency issues with parallel edits
+
+# Track whether we need to send feedback to Claude (exit code 2)
+# Only use this for non-parallel operations to avoid concurrency errors
+needs_feedback = False
 
 # Check for cd command in Bash operations
 if tool_name == "Bash":
     command = tool_input.get("command", "")
     if "cd " in command:
         print(f"[CWD: {cwd}]", file=sys.stderr)
-        mod = True
+        needs_feedback = True
 
-if mod:
+if needs_feedback:
     sys.exit(2)  # Exit code 2 feeds stderr back to Claude
 else:
-    sys.exit(0)
+    sys.exit(0)  # Silent exit, DAIC reminder still visible in logs
