@@ -187,20 +187,20 @@ function copyJavaScriptFiles() {
     path.join(PROJECT_ROOT, 'sessions', 'hooks')
   );
 
-  // Copy protocols
+  // Copy protocols from shared directory
   copyDirectory(
-    path.join(jsRoot, 'protocols'),
+    path.join(SCRIPT_DIR, 'cc_sessions', 'protocols'),
     path.join(PROJECT_ROOT, 'sessions', 'protocols')
   );
 
-  // Copy commands
+  // Copy commands from shared directory
   copyDirectory(
-    path.join(jsRoot, 'commands'),
+    path.join(SCRIPT_DIR, 'cc_sessions', 'commands'),
     path.join(PROJECT_ROOT, '.claude', 'commands')
   );
 
-  // Copy templates to their respective destinations
-  const templatesDir = path.join(jsRoot, 'templates');
+  // Copy templates from shared directory to their respective destinations
+  const templatesDir = path.join(SCRIPT_DIR, 'cc_sessions', 'templates');
 
   copyFile(
     path.join(templatesDir, 'CLAUDE.sessions.md'),
@@ -404,13 +404,13 @@ function initializeStateFiles() {
     process.exit(1);
   }
 
-  const { loadState, loadConfig, saveConfig } = require(sharedStatePath);
+  const { loadState, loadConfig, editConfig } = require(sharedStatePath);
 
   // These functions create the files if they don't exist
   loadState();
-  const config = loadConfig();
+  loadConfig();
 
-  // Detect and set OS in configuration
+  // Detect and set OS in configuration using editConfig callback
   const osType = os.platform();  // Returns 'win32', 'linux', or 'darwin'
   const osMap = {
     'win32': 'windows',
@@ -419,9 +419,10 @@ function initializeStateFiles() {
   };
   const detectedOs = osMap[osType] || 'linux';  // Default to linux if unknown
 
-  // Update config with detected OS
-  config.environment.os = detectedOs;
-  saveConfig(config);
+  // Update config with detected OS using editConfig callback
+  editConfig((config) => {
+    config.environment.os = detectedOs;
+  });
 
   // Verify files were created
   const stateFile = path.join(PROJECT_ROOT, 'sessions', 'sessions-state.json');
