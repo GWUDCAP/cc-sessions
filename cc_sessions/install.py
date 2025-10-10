@@ -3,7 +3,7 @@
 # ===== IMPORTS ===== #
 
 ## ===== STDLIB ===== ##
-import shutil, json, sys, os
+import shutil, json, sys, os, subprocess, tempfile, contextlib
 from pathlib import Path
 ##-##
 
@@ -15,6 +15,18 @@ import inquirer
 
 ## ===== LOCAL ===== ##
 ##-##
+
+# Global shared_state handle (set after files are installed)
+ss = None
+
+# Standard agents we ship and may import overrides for
+AGENT_BASELINE = [
+    'code-review.md',
+    'context-gathering.md',
+    'context-refinement.md',
+    'logging.md',
+    'service-documentation.md',
+]
 
 #-#
 
@@ -79,6 +91,10 @@ def copy_directory(src, dest):
 
 def color(text, color_code) -> str:
     return f"{color_code}{text}{Colors.RESET}"
+
+def choices_filtered(choices):
+    """Filter out falsy/None choices for inquirer inputs."""
+    return [c for c in choices if c]
 
 def get_package_root() -> Path:
     """Get the root directory of the installed cc_sessions package."""
@@ -150,6 +166,7 @@ def print_blocking_header() -> None:
     print(color('║ █████╔╝███████╗╚█████╔╝╚█████╗██║  ██╗██████╗██║╚███║╚█████║ ║', Colors.CYAN))
     print(color('║ ╚════╝ ╚══════╝ ╚════╝  ╚════╝╚═╝  ╚═╝╚═════╝╚═╝ ╚══╝ ╚════╝ ║', Colors.CYAN))
     print(color('╚══════════════ blocked tools and bash commands ═══════════════╝', Colors.CYAN))
+#!<
 
 #!> Read only commands section
 def print_read_only_section() -> None:
@@ -187,8 +204,6 @@ def print_extrasafe_section() -> None:
     print(color("╚════════════ toggle blocking for unrecognized commands ═════════════╝",Colors.CYAN))
 #!<
 
-#!<
-
 #!> Trigger phrases
 def print_triggers_header() -> None:
     print(color('╔══════════════════════════════════════════════════════════╗',Colors.CYAN))
@@ -199,6 +214,7 @@ def print_triggers_header() -> None:
     print(color('║   ██║  ██║ ██║██████╗╚█████║╚█████║██████╗██║ ██║██████║ ║',Colors.CYAN))
     print(color('║   ╚═╝  ╚═╝ ╚═╝╚═════╝ ╚════╝ ╚════╝╚═════╝╚═╝ ╚═╝╚═════╝ ║',Colors.CYAN))
     print(color('╚════════ natural language controls for Claude Code ═══════╝',Colors.CYAN))
+#!<
 
 #!> Implementation mode triggers section
 def print_go_triggers_section() -> None:
@@ -270,8 +286,6 @@ def print_compact_section() -> None:
     print(color('║ ╚█████╗╚█████╔╝██║    ██║██║     ██║  ██║╚█████╗  ██║   ║',Colors.CYAN))
     print(color('║  ╚════╝ ╚════╝ ╚═╝    ╚═╝╚═╝     ╚═╝  ╚═╝ ╚════╝  ╚═╝   ║',Colors.CYAN))
     print(color('╚═════════ activate context compaction protocol ══════════╝',Colors.CYAN))
-#!<
-
 #!<
 
 #!> Feature toggles header
@@ -605,28 +619,46 @@ def configure_gitignore(project_root):
         gitignore_path.write_text('\n'.join(gitignore_entries), encoding='utf-8')
 #!<
 
-#!> Initialize state file
-def initialize_state_files(project_root):
-    print(color('Initializing state files...', Colors.CYAN))
+#!> Setup shared state and initialize config/state
+def setup_shared_state_and_initialize(project_root):
+    print(color('Initializing state and configuration...', Colors.CYAN))
 
-    # Set environment variable so shared_state can find project root
+    # Ensure shared_state can resolve the project root
     os.environ['CLAUDE_PROJECT_DIR'] = str(project_root)
+    hooks_path = project_root / 'sessions' / 'hooks'
+    if str(hooks_path) not in sys.path:
+        sys.path.insert(0, str(hooks_path))
 
-    # Add sessions/hooks to path so we can import shared_state
-    sys.path.insert(0, str(project_root / 'sessions' / 'hooks'))
+    global ss
+    try:
+        import shared_state as ss  # type: ignore
+    except Exception as e:
+        print(color('⚠️  Could not import shared_state module after file installation.', Colors.YELLOW))
+        print(color(f'Error: {e}', Colors.YELLOW))
+        raise
 
-    # Detect and set OS in configuration using edit_config context manager
-    os_name = platform.system()  # Returns 'Windows', 'Linux', or 'Darwin'
-    os_map = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macos'}
-    detected_os = os_map.get(os_name, 'linux')  # Default to linux if unknown
+    # Ensure files exist and set a sensible default OS
+    _ = ss.load_config()
+    _ = ss.load_state()
 
-    # Update config with detected OS
-    with edit_config() as config: config.environment.os = detected_os
+    os_name = platform.system()
+    os_map = {'Windows': ss.UserOS.WINDOWS, 'Linux': ss.UserOS.LINUX, 'Darwin': ss.UserOS.MACOS}
+    detected_os = os_map.get(os_name, ss.UserOS.LINUX)
+
+    with ss.edit_config() as config:
+        # Coerce/initialize OS field
+        current = getattr(config.environment, 'os', None)
+        if isinstance(current, str):
+            try:
+                config.environment.os = ss.UserOS(current)
+            except Exception:
+                config.environment.os = detected_os
+        elif current is None:
+            config.environment.os = detected_os
 
     # Verify files were created
     state_file = project_root / 'sessions' / 'sessions-state.json'
     config_file = project_root / 'sessions' / 'sessions-config.json'
-
     if not state_file.exists() or not config_file.exists():
         print(color('⚠️  State files were not created properly', Colors.YELLOW))
         print(color('You may need to initialize them manually on first run', Colors.YELLOW))
@@ -724,17 +756,6 @@ def restore_tasks(project_root, backup_dir):
 
 #!<
 
-##-##
-
-## ===== CONFIG INTERACTIONS ===== ##
-##-##
-
-## ===== FILE INSTALLATION ===== ##
-
-##-##
-
-## ===== 
-
 #!> Git preferences
 def gather_git_preferences(config: dict) -> dict:
     print_git_section()
@@ -743,7 +764,8 @@ def gather_git_preferences(config: dict) -> dict:
     print("Default branch name (e.g. 'main', 'master', 'develop', etc.):")
     print(color("*This is the branch you will merge to when completing tasks*", Colors.YELLOW))
     default_branch = input(color("[main] ", Colors.CYAN)) or 'main'
-    with edit_config() as conf: conf.git_preferences.default_branch = default_branch
+    with ss.edit_config() as conf:
+        conf.git_preferences.default_branch = default_branch
     #!<
 
     #!> Submodules
@@ -751,38 +773,45 @@ def gather_git_preferences(config: dict) -> dict:
         message="Does this repository use git submodules?",
         choices=['Yes', 'No'],
         default='Yes')
-    with edit_config() as conf: conf.git_preferences.has_submodules = (has_submodules == 'Yes')
+    with ss.edit_config() as conf:
+        conf.git_preferences.has_submodules = (has_submodules == 'Yes')
     #!<
 
     #!> Staging pattern
     add_pattern = inquirer.list_input(
         message="When committing, how should files be staged?",
         choices=['Ask me each time', 'Stage all modified files automatically'])
-    with edit_config() as conf: conf.git_preferences.add_pattern = 'ask' if 'Ask' in add_pattern else all
+    with ss.edit_config() as conf:
+        conf.git_preferences.add_pattern = ss.GitAddPattern.ASK if 'Ask' in add_pattern else ss.GitAddPattern.ALL
     #!<
 
     #!> Commit style
     commit_style = inquirer.list_input(
         message="Commit message style:",
         choices=['Detailed (multi-line with description)', 'Conventional (type: subject format)', 'Simple (single line)'])
-    if 'Detailed' in commit_style: 
-        with edit_config() as conf: conf.git_preferences.commit_style = 'detailed'
-    elif 'Conventional' in commit_style: config['git_preferences']['commit_style'] = 'conventional'
-    else: config['git_preferences']['commit_style'] = 'simple'
+    with ss.edit_config() as conf:
+        if 'Detailed' in commit_style:
+            conf.git_preferences.commit_style = ss.GitCommitStyle.OP
+        elif 'Conventional' in commit_style:
+            conf.git_preferences.commit_style = ss.GitCommitStyle.REG
+        else:
+            conf.git_preferences.commit_style = ss.GitCommitStyle.SIMP
     #!<
 
     #!> Auto-merge
     auto_merge = inquirer.list_input(
         message="After task completion:",
         choices=['Ask me first', f'Auto-merge to {default_branch}'])
-    config['git_preferences']['auto_merge'] = ('Auto-merge' in auto_merge)
+    with ss.edit_config() as conf:
+        conf.git_preferences.auto_merge = ('Auto-merge' in auto_merge)
     #!<
 
     #!> Auto-push
     auto_push = inquirer.list_input(
         message="After committing/merging:",
         choices=['Ask me first', 'Auto-push to remote'])
-    config['git_preferences']['auto_push'] = ('Auto-push' in auto_push)
+    with ss.edit_config() as conf:
+        conf.git_preferences.auto_push = ('Auto-push' in auto_push)
     #!<
 
     return config
@@ -793,49 +822,55 @@ def gather_environment_settings(config: dict) -> dict:
     print_env_section()
 
     developer_name = input(color("What should Claude call you? [developer] ", Colors.CYAN)) or 'developer'
-    config['environment']['developer_name'] = developer_name
+    with ss.edit_config() as conf:
+        conf.environment.developer_name = developer_name
 
     # Detect OS
     os_name = platform.system()
-    os_map = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macos'}
-    detected_os = os_map.get(os_name, 'linux')
+    detected_os = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macos'}.get(os_name, 'linux')
 
     os_choice = inquirer.list_input(
         message=f"Detected OS: {detected_os.capitalize()}",
-        choices=[
+        choices=choices_filtered([
             f'{detected_os.capitalize()} is correct',
             'Switch to Windows' if detected_os != 'windows' else None,
             'Switch to macOS' if detected_os != 'macos' else None,
             'Switch to Linux' if detected_os != 'linux' else None
-        ],
+        ]),
         default=f'{detected_os.capitalize()} is correct'
     )
-    if 'Windows' in os_choice: config['environment']['os'] = 'windows'
-    elif 'macOS' in os_choice: config['environment']['os'] = 'macos'
-    elif 'Linux' in os_choice: config['environment']['os'] = 'linux'
-    else: config['environment']['os'] = detected_os
+    with ss.edit_config() as conf:
+        if 'Windows' in os_choice: conf.environment.os = ss.UserOS.WINDOWS
+        elif 'macOS' in os_choice: conf.environment.os = ss.UserOS.MACOS
+        elif 'Linux' in os_choice: conf.environment.os = ss.UserOS.LINUX
+        else: conf.environment.os = ss.UserOS(detected_os)
 
     # Detect shell
     detected_shell = os.environ.get('SHELL', 'bash').split('/')[-1]
 
     shell_choice = inquirer.list_input(
         message=f"Detected shell: {detected_shell}",
-        choices=[
+        choices=choices_filtered([
             f'{detected_shell} is correct',
             'Switch to bash' if detected_shell != 'bash' else None,
             'Switch to zsh' if detected_shell != 'zsh' else None,
             'Switch to fish' if detected_shell != 'fish' else None,
             'Switch to powershell' if detected_shell != 'powershell' else None,
             'Switch to cmd' if detected_shell != 'cmd' else None
-        ],
+        ]),
         default=f'{detected_shell} is correct')
 
-    if 'bash' in shell_choice: config['environment']['shell'] = 'bash'
-    elif 'zsh' in shell_choice: config['environment']['shell'] = 'zsh'
-    elif 'fish' in shell_choice: config['environment']['shell'] = 'fish'
-    elif 'powershell' in shell_choice: config['environment']['shell'] = 'powershell'
-    elif 'cmd' in shell_choice: config['environment']['shell'] = 'cmd'
-    else: config['environment']['shell'] = detected_shell
+    with ss.edit_config() as conf:
+        if 'bash' in shell_choice: conf.environment.shell = ss.UserShell.BASH
+        elif 'zsh' in shell_choice: conf.environment.shell = ss.UserShell.ZSH
+        elif 'fish' in shell_choice: conf.environment.shell = ss.UserShell.FISH
+        elif 'powershell' in shell_choice: conf.environment.shell = ss.UserShell.POWERSHELL
+        elif 'cmd' in shell_choice: conf.environment.shell = ss.UserShell.CMD
+        else:
+            try:
+                conf.environment.shell = ss.UserShell(detected_shell)
+            except Exception:
+                conf.environment.shell = ss.UserShell.BASH
 
     return config
 #!<
@@ -856,7 +891,13 @@ def gather_blocked_actions(config: dict) -> dict:
         choices=all_tools,
         default=default_blocked
     )
-    config['blocked_actions']['implementation_only_tools'] = blocked_tools
+    with ss.edit_config() as conf:
+        conf.blocked_actions.implementation_only_tools = []
+        for t in blocked_tools:
+            try:
+                conf.blocked_actions.implementation_only_tools.append(ss.CCTools(t))
+            except Exception:
+                pass
 
     #!> Bash read-like patterns
     print_read_only_section()
@@ -880,7 +921,8 @@ def gather_blocked_actions(config: dict) -> dict:
         custom_read.append(cmd)
         print(color(f"✓ Added '{cmd}' to read-only commands", Colors.GREEN))
 
-    config['blocked_actions']['bash_read_patterns'] = custom_read
+    with ss.edit_config() as conf:
+        conf.blocked_actions.bash_read_patterns = custom_read
     #!<
 
     #!> Bash write-like patterns
@@ -903,7 +945,8 @@ def gather_blocked_actions(config: dict) -> dict:
         custom_write.append(cmd)
         print(color(f"✓ Added '{cmd}' to write-like commands", Colors.GREEN))
 
-    config['blocked_actions']['bash_write_patterns'] = custom_write
+    with ss.edit_config() as conf:
+        conf.blocked_actions.bash_write_patterns = custom_write
     #!<
 
     #!> Extrasafe mode
@@ -912,7 +955,8 @@ def gather_blocked_actions(config: dict) -> dict:
     extrasafe = inquirer.list_input(
         message="What if Claude uses a bash command in discussion mode that's not in our\nread-only *or* our write-like list?",
         choices=['Extrasafe OFF (allows unrecognized commands)', 'Extrasafe ON (blocks unrecognized commands)'])
-    config['blocked_actions']['extrasafe'] = ('ON' in extrasafe)
+    with ss.edit_config() as conf:
+        conf.blocked_actions.extrasafe = ('ON' in extrasafe)
     #!<
 
     return config
@@ -938,15 +982,16 @@ def gather_trigger_phrases(config: dict) -> dict:
         choices=['Use defaults', 'Customize']
     )
 
-    # Set defaults first
-    config['trigger_phrases'] = {
-        'implementation_mode': ['yert'],
-        'discussion_mode': ['SILENCE'],
-        'task_creation': ['mek:'],
-        'task_startup': ['start^:'],
-        'task_completion': ['finito'],
-        'context_compaction': ['squish']
-    }
+    # Ensure sensible defaults exist in config
+    with ss.edit_config() as conf:
+        tp = conf.trigger_phrases
+        # Only set defaults if lists are empty
+        if not getattr(tp, 'implementation_mode', None): tp.implementation_mode = ['yert']
+        if not getattr(tp, 'discussion_mode', None): tp.discussion_mode = ['SILENCE']
+        if not getattr(tp, 'task_creation', None): tp.task_creation = ['mek:']
+        if not getattr(tp, 'task_startup', None): tp.task_startup = ['start^:']
+        if not getattr(tp, 'task_completion', None): tp.task_completion = ['finito']
+        if not getattr(tp, 'context_compaction', None): tp.context_compaction = ['squish']
 
     if customize_triggers == 'Customize':
         #!> Implementation mode
@@ -969,7 +1014,8 @@ def gather_trigger_phrases(config: dict) -> dict:
         while True:
             phrase = input(color("> ", Colors.CYAN)).strip()
             if not phrase: break
-            config['trigger_phrases']['implementation_mode'].append(phrase)
+            with ss.edit_config() as conf:
+                conf.trigger_phrases.implementation_mode.append(phrase)
             print(color(f"✓ Added '{phrase}'", Colors.GREEN))
         #!<
 
@@ -984,7 +1030,8 @@ def gather_trigger_phrases(config: dict) -> dict:
         while True:
             phrase = input(color("> ", Colors.CYAN)).strip()
             if not phrase: break
-            config['trigger_phrases']['discussion_mode'].append(phrase)
+            with ss.edit_config() as conf:
+                conf.trigger_phrases.discussion_mode.append(phrase)
             print(color(f"✓ Added '{phrase}'", Colors.GREEN))
         #!<
 
@@ -999,7 +1046,8 @@ def gather_trigger_phrases(config: dict) -> dict:
         while True:
             phrase = input(color("> ", Colors.CYAN)).strip()
             if not phrase: break
-            config['trigger_phrases']['task_creation'].append(phrase)
+            with ss.edit_config() as conf:
+                conf.trigger_phrases.task_creation.append(phrase)
             print(color(f"✓ Added '{phrase}'", Colors.GREEN))
         #!<
 
@@ -1014,7 +1062,8 @@ def gather_trigger_phrases(config: dict) -> dict:
         while True:
             phrase = input(color("> ", Colors.CYAN)).strip()
             if not phrase: break
-            config['trigger_phrases']['task_startup'].append(phrase)
+            with ss.edit_config() as conf:
+                conf.trigger_phrases.task_startup.append(phrase)
             print(color(f"✓ Added '{phrase}'", Colors.GREEN))
         #!<
 
@@ -1029,7 +1078,8 @@ def gather_trigger_phrases(config: dict) -> dict:
         while True:
             phrase = input(color("> ", Colors.CYAN)).strip()
             if not phrase: break
-            config['trigger_phrases']['task_completion'].append(phrase)
+            with ss.edit_config() as conf:
+                conf.trigger_phrases.task_completion.append(phrase)
             print(color(f"✓ Added '{phrase}'", Colors.GREEN))
         #!<
 
@@ -1044,7 +1094,8 @@ def gather_trigger_phrases(config: dict) -> dict:
         while True:
             phrase = input(color("> ", Colors.CYAN)).strip()
             if not phrase: break
-            config['trigger_phrases']['context_compaction'].append(phrase)
+            with ss.edit_config() as conf:
+                conf.trigger_phrases.context_compaction.append(phrase)
             print(color(f"✓ Added '{phrase}'", Colors.GREEN))
         #!<
 
@@ -1068,7 +1119,8 @@ def gather_features(config: dict) -> dict:
     branch_enforcement = inquirer.list_input(
         message="Branch enforcement:",
         choices=['Enabled (recommended for git workflows)', 'Disabled (for alternative VCS like Jujutsu)'])
-    config['features']['branch_enforcement'] = ('Enabled' in branch_enforcement)
+    with ss.edit_config() as conf:
+        conf.features.branch_enforcement = ('Enabled' in branch_enforcement)
     #!<
 
     #!> Auto-ultrathink
@@ -1081,23 +1133,33 @@ def gather_features(config: dict) -> dict:
 
     auto_ultrathink = inquirer.list_input(
         message="Auto-ultrathink:",
-        choices=['Enabled', 'Disabled (recommended for budget-conscious users)']) config['features']['auto_ultrathink'] = ('Enabled' == auto_ultrathink)
+        choices=['Enabled', 'Disabled (recommended for budget-conscious users)'])
+    with ss.edit_config() as conf:
+        conf.features.auto_ultrathink = (auto_ultrathink == 'Enabled')
     #!<
 
     #!> Nerd Fonts
     nerd_fonts = inquirer.list_input(
         message="Nerd Fonts display icons in the statusline for a visual interface:",
         choices=['Enabled', 'Disabled (ASCII fallback)'])
-    config['features']['use_nerd_fonts'] = ('Enabled' == nerd_fonts)
+    with ss.edit_config() as conf:
+        conf.features.use_nerd_fonts = (nerd_fonts == 'Enabled')
     #!<
 
     #!> Context warnings
     context_warnings = inquirer.list_input(
         message="Context warnings notify you when approaching token limits (85% and 90%):",
         choices=['Both warnings enabled', 'Only 90% warning', 'Disabled'])
-    if 'Both' in context_warnings: config['features']['context_warnings'] = {'warn_85': True, 'warn_90': True}
-    elif 'Only' in context_warnings: config['features']['context_warnings'] = {'warn_85': False, 'warn_90': True}
-    else: config['features']['context_warnings'] = {'warn_85': False, 'warn_90': False}
+    with ss.edit_config() as conf:
+        if 'Both' in context_warnings:
+            conf.features.context_warnings.warn_85 = True
+            conf.features.context_warnings.warn_90 = True
+        elif 'Only' in context_warnings:
+            conf.features.context_warnings.warn_85 = False
+            conf.features.context_warnings.warn_90 = True
+        else:
+            conf.features.context_warnings.warn_85 = False
+            conf.features.context_warnings.warn_90 = False
     #!<
 
     #!> Statusline configuration
@@ -1108,7 +1170,7 @@ def gather_features(config: dict) -> dict:
         choices=['Yes, use cc-sessions statusline', 'No, I have my own statusline'])
     if 'Yes' in statusline_choice:
         # Configure statusline in .claude/settings.json
-        settings_file = project_root / '.claude' / 'settings.json'
+        settings_file = ss.PROJECT_ROOT / '.claude' / 'settings.json'
 
         if settings_file.exists():
             with open(settings_file, 'r') as f: settings = json.load(f)
@@ -1159,6 +1221,399 @@ def interactive_configuration(project_root):
 
     print(color('\n✓ Configuration complete!\n', Colors.GREEN))
     return config
+##-##
+
+## ===== CONFIG PHASES ===== ##
+def run_full_configuration():
+    print_config_header()
+    cfg = {'git_preferences': {}, 'environment': {}, 'blocked_actions': {}, 'trigger_phrases': {}, 'features': {}}
+    gather_git_preferences(cfg)
+    gather_environment_settings(cfg)
+    gather_blocked_actions(cfg)
+    gather_trigger_phrases(cfg)
+    gather_features(cfg)
+    print(color('\n✓ Configuration complete!\n', Colors.GREEN))
+
+
+def run_config_editor():
+    print_config_header()
+    print(color('Use the menu to edit individual settings. Choose Done when finished.\n', Colors.CYAN))
+
+    # Map menu labels to actions
+    actions = [
+        ('Git: Default branch', _ask_default_branch),
+        ('Git: Has submodules', _ask_has_submodules),
+        ('Git: Staging pattern', _ask_git_add_pattern),
+        ('Git: Commit style', _ask_commit_style),
+        ('Git: Auto-merge behavior', _ask_auto_merge),
+        ('Git: Auto-push behavior', _ask_auto_push),
+        ('Env: Developer name', _ask_developer_name),
+        ('Env: Operating system', _ask_os),
+        ('Env: Shell', _ask_shell),
+        ('Blocked: Tools list', _edit_blocked_tools),
+        ('Blocked: Bash read-only commands', _edit_bash_read_patterns),
+        ('Blocked: Bash write-like commands', _edit_bash_write_patterns),
+        ('Blocked: Extrasafe mode', _ask_extrasafe_mode),
+        ('Triggers: Implementation mode', _edit_triggers_implementation),
+        ('Triggers: Discussion mode', _edit_triggers_discussion),
+        ('Triggers: Task creation', _edit_triggers_task_creation),
+        ('Triggers: Task startup', _edit_triggers_task_startup),
+        ('Triggers: Task completion', _edit_triggers_task_completion),
+        ('Triggers: Context compaction', _edit_triggers_compaction),
+        ('Features: Branch enforcement', _ask_branch_enforcement),
+        ('Features: Auto-ultrathink', _ask_auto_ultrathink),
+        ('Features: Nerd Fonts', _ask_nerd_fonts),
+        ('Features: Context warnings', _ask_context_warnings),
+        ('Features: Statusline integration', _ask_statusline),
+        ('Done', None),
+    ]
+
+    label_to_fn = {label: fn for (label, fn) in actions}
+
+    while True:
+        try:
+            choice = inquirer.list_input(
+                message='Edit which setting?',
+                choices=[label for (label, _) in actions]
+            )
+        except KeyboardInterrupt:
+            break
+
+        if choice == 'Done':
+            break
+        fn = label_to_fn.get(choice)
+        if fn:
+            try:
+                fn()
+            except Exception as e:
+                print(color(f'⚠️  Error while editing setting: {e}', Colors.YELLOW))
+        print()
+##-##
+
+## ===== CONFIG QUESTION FUNCTIONS ===== ##
+def _ask_default_branch():
+    print_git_section()
+    print(color("Update default branch (target for merges)", Colors.CYAN))
+    val = input(color("[main] ", Colors.CYAN)) or 'main'
+    with ss.edit_config() as conf: conf.git_preferences.default_branch = val
+
+def _ask_has_submodules():
+    print_git_section()
+    val = inquirer.list_input(message='Does this repo use git submodules?', choices=['Yes', 'No'])
+    with ss.edit_config() as conf: conf.git_preferences.has_submodules = (val == 'Yes')
+
+def _ask_git_add_pattern():
+    print_git_section()
+    val = inquirer.list_input(message='Staging behavior when committing:', choices=['Ask me each time', 'Stage all modified files automatically'])
+    with ss.edit_config() as conf: conf.git_preferences.add_pattern = ss.GitAddPattern.ASK if 'Ask' in val else ss.GitAddPattern.ALL
+
+def _ask_commit_style():
+    print_git_section()
+    val = inquirer.list_input(message='Commit message style:', choices=['Detailed (multi-line with description)', 'Conventional (type: subject format)', 'Simple (single line)'])
+    with ss.edit_config() as conf:
+        if 'Detailed' in val: conf.git_preferences.commit_style = ss.GitCommitStyle.OP
+        elif 'Conventional' in val: conf.git_preferences.commit_style = ss.GitCommitStyle.REG
+        else: conf.git_preferences.commit_style = ss.GitCommitStyle.SIMP
+
+def _ask_auto_merge():
+    print_git_section()
+    default_branch = ss.load_config().git_preferences.default_branch
+    val = inquirer.list_input(message='After task completion:', choices=['Ask me first', f'Auto-merge to {default_branch}'])
+    with ss.edit_config() as conf: conf.git_preferences.auto_merge = ('Auto-merge' in val)
+
+def _ask_auto_push():
+    print_git_section()
+    val = inquirer.list_input(message='After committing/merging:', choices=['Ask me first', 'Auto-push to remote'])
+    with ss.edit_config() as conf: conf.git_preferences.auto_push = ('Auto-push' in val)
+
+def _ask_developer_name():
+    print_env_section()
+    name = input(color("What should Claude call you? [developer] ", Colors.CYAN)) or 'developer'
+    with ss.edit_config() as conf:
+        conf.environment.developer_name = name
+
+def _ask_os():
+    print_env_section()
+    os_name = platform.system()
+    detected = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macos'}.get(os_name, 'linux')
+    val = inquirer.list_input(
+        message=f"Detected OS: {detected.capitalize()}",
+        choices=choices_filtered([
+            f'{detected.capitalize()} is correct',
+            'Switch to Windows' if detected != 'windows' else None,
+            'Switch to macOS' if detected != 'macos' else None,
+            'Switch to Linux' if detected != 'linux' else None
+        ]),
+        default=f'{detected.capitalize()} is correct')
+    with ss.edit_config() as conf:
+        if 'Windows' in val: conf.environment.os = ss.UserOS.WINDOWS
+        elif 'macOS' in val: conf.environment.os = ss.UserOS.MACOS
+        elif 'Linux' in val: conf.environment.os = ss.UserOS.LINUX
+        else: conf.environment.os = ss.UserOS(detected)
+
+def _ask_shell():
+    print_env_section()
+    detected_shell = os.environ.get('SHELL', 'bash').split('/')[-1]
+    val = inquirer.list_input(
+        message=f"Detected shell: {detected_shell}",
+        choices=choices_filtered([
+            f'{detected_shell} is correct',
+            'Switch to bash' if detected_shell != 'bash' else None,
+            'Switch to zsh' if detected_shell != 'zsh' else None,
+            'Switch to fish' if detected_shell != 'fish' else None,
+            'Switch to powershell' if detected_shell != 'powershell' else None,
+            'Switch to cmd' if detected_shell != 'cmd' else None
+        ]),
+        default=f'{detected_shell} is correct')
+    with ss.edit_config() as conf:
+        if 'bash' in val: conf.environment.shell = ss.UserShell.BASH
+        elif 'zsh' in val: conf.environment.shell = ss.UserShell.ZSH
+        elif 'fish' in val: conf.environment.shell = ss.UserShell.FISH
+        elif 'powershell' in val: conf.environment.shell = ss.UserShell.POWERSHELL
+        elif 'cmd' in val: conf.environment.shell = ss.UserShell.CMD
+        else:
+            try: conf.environment.shell = ss.UserShell(detected_shell)
+            except Exception: conf.environment.shell = ss.UserShell.BASH
+
+def _edit_blocked_tools():
+    gather_blocked_actions({'blocked_actions': {}})
+
+def _edit_bash_read_patterns():
+    print_read_only_section()
+    print(color('Add commands to allow in Discussion mode. Press Enter on empty line to finish.\n', Colors.CYAN))
+    added = []
+    while True:
+        cmd = input(color('> ', Colors.CYAN)).strip()
+        if not cmd: break
+        added.append(cmd)
+        print(color(f"✓ Added '{cmd}'", Colors.GREEN))
+    with ss.edit_config() as conf: conf.blocked_actions.bash_read_patterns.extend(added)
+
+def _edit_bash_write_patterns():
+    print_write_like_section()
+    print(color('Add write-like commands to block in Discussion mode. Press Enter on empty line to finish.\n', Colors.CYAN))
+    added = []
+    while True:
+        cmd = input(color('> ', Colors.CYAN)).strip()
+        if not cmd: break
+        added.append(cmd)
+        print(color(f"✓ Added '{cmd}'", Colors.GREEN))
+    with ss.edit_config() as conf: conf.blocked_actions.bash_write_patterns.extend(added)
+
+def _ask_extrasafe_mode():
+    print_extrasafe_section()
+    val = inquirer.list_input(message='Extrasafe behavior for unrecognized bash commands in Discussion mode:', choices=['Extrasafe OFF (allows unrecognized commands)', 'Extrasafe ON (blocks unrecognized commands)'])
+    with ss.edit_config() as conf: conf.blocked_actions.extrasafe = ('ON' in val)
+
+def _edit_triggers_implementation():
+    print_go_triggers_section()
+    print(color('Add implementation-mode trigger phrases. Press Enter on empty line to finish.\n', Colors.CYAN))
+    while True:
+        phrase = input(color('> ', Colors.CYAN)).strip()
+        if not phrase: break
+        with ss.edit_config() as conf: conf.trigger_phrases.implementation_mode.append(phrase)
+        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+
+def _edit_triggers_discussion():
+    print_no_triggers_section()
+    print(color('Add discussion-mode trigger phrases. Press Enter on empty line to finish.\n', Colors.CYAN))
+    while True:
+        phrase = input(color('> ', Colors.CYAN)).strip()
+        if not phrase: break
+        with ss.edit_config() as conf: conf.trigger_phrases.discussion_mode.append(phrase)
+        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+
+def _edit_triggers_task_creation():
+    print_create_section()
+    print(color('Add task creation trigger phrases. Press Enter on empty line to finish.\n', Colors.CYAN))
+    while True:
+        phrase = input(color('> ', Colors.CYAN)).strip()
+        if not phrase: break
+        with ss.edit_config() as conf: conf.trigger_phrases.task_creation.append(phrase)
+        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+
+def _edit_triggers_task_startup():
+    print_startup_section()
+    print(color('Add task startup trigger phrases. Press Enter on empty line to finish.\n', Colors.CYAN))
+    while True:
+        phrase = input(color('> ', Colors.CYAN)).strip()
+        if not phrase: break
+        with ss.edit_config() as conf: conf.trigger_phrases.task_startup.append(phrase)
+        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+
+def _edit_triggers_task_completion():
+    print_complete_section()
+    print(color('Add task completion trigger phrases. Press Enter on empty line to finish.\n', Colors.CYAN))
+    while True:
+        phrase = input(color('> ', Colors.CYAN)).strip()
+        if not phrase: break
+        with ss.edit_config() as conf: conf.trigger_phrases.task_completion.append(phrase)
+        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+
+def _edit_triggers_compaction():
+    print_compact_section()
+    print(color('Add context compaction trigger phrases. Press Enter on empty line to finish.\n', Colors.CYAN))
+    while True:
+        phrase = input(color('> ', Colors.CYAN)).strip()
+        if not phrase: break
+        with ss.edit_config() as conf: conf.trigger_phrases.context_compaction.append(phrase)
+        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+
+def _ask_branch_enforcement():
+    print_features_header()
+    val = inquirer.list_input(message='Branch enforcement:', choices=['Enabled (recommended for git workflows)', 'Disabled (for alternative VCS like Jujutsu)'])
+    with ss.edit_config() as conf: conf.features.branch_enforcement = ('Enabled' in val)
+
+def _ask_auto_ultrathink():
+    print_features_header()
+    val = inquirer.list_input(message='Auto-ultrathink:', choices=['Enabled', 'Disabled (recommended for budget-conscious users)'])
+    with ss.edit_config() as conf: conf.features.auto_ultrathink = (val == 'Enabled')
+
+def _ask_nerd_fonts():
+    print_features_header()
+    val = inquirer.list_input(message='Nerd Fonts icons in statusline:', choices=['Enabled', 'Disabled (ASCII fallback)'])
+    with ss.edit_config() as conf: conf.features.use_nerd_fonts = (val == 'Enabled')
+
+def _ask_context_warnings():
+    print_features_header()
+    val = inquirer.list_input(message='Context warnings:', choices=['Both warnings enabled', 'Only 90% warning', 'Disabled'])
+    with ss.edit_config() as conf:
+        if 'Both' in val:
+            conf.features.context_warnings.warn_85 = True
+            conf.features.context_warnings.warn_90 = True
+        elif 'Only' in val:
+            conf.features.context_warnings.warn_85 = False
+            conf.features.context_warnings.warn_90 = True
+        else:
+            conf.features.context_warnings.warn_85 = False
+            conf.features.context_warnings.warn_90 = False
+
+def _ask_statusline():
+    print_statusline_header()
+    val = inquirer.list_input(message='Use cc-sessions statusline?', choices=['Yes, use cc-sessions statusline', 'No, I have my own statusline'])
+    if 'Yes' in val:
+        settings_file = ss.PROJECT_ROOT / '.claude' / 'settings.json'
+        if settings_file.exists(): with open(settings_file, 'r') as f: settings = json.load(f)
+        else: settings = {}
+        settings['statusLine'] = {'type': 'command', 'command': 'python $CLAUDE_PROJECT_DIR/sessions/statusline.py'}
+        with open(settings_file, 'w') as f: json.dump(settings, f, indent=2)
+        print(color('✓ Statusline configured in .claude/settings.json', Colors.GREEN))
+    else: print(color('Statusline not configured.', Colors.CYAN))
+##-##
+
+## ===== IMPORT CONFIG ===== ##
+def import_config(project_root: Path, source: str, source_type: str) -> bool:
+    """Import configuration and selected agents from a local dir, Git URL, or GitHub stub.
+    Returns True on success (config or any agent imported).
+    """
+    tmp_to_remove: Path | None = None
+    imported_any = False
+    try:
+        # Resolve source to a local directory path
+        if source_type == 'GitHub stub (owner/repo)':
+            owner_repo = source.strip().strip('/')
+            url = f"https://github.com/{owner_repo}.git"
+            tmp_to_remove = Path(tempfile.mkdtemp(prefix='ccs-import-'))
+            try: subprocess.run(['git', 'clone', '--depth', '1', url, str(tmp_to_remove)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            except Exception as e:
+                print(color(f'Git clone failed for {url}: {e}', Colors.RED))
+                return False
+            src_path = tmp_to_remove
+        elif source_type == 'Git repository URL':
+            url = source.strip()
+            tmp_to_remove = Path(tempfile.mkdtemp(prefix='ccs-import-'))
+            try: subprocess.run(['git', 'clone', '--depth', '1', url, str(tmp_to_remove)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            except Exception as e:
+                print(color(f'Git clone failed for {url}: {e}', Colors.RED))
+                return False
+            src_path = tmp_to_remove
+        else:
+            # Local directory
+            src_path = Path(source).expanduser().resolve()
+            if not src_path.exists() or not src_path.is_dir():
+                print(color('Provided path does not exist or is not a directory.', Colors.RED))
+                return False
+
+        # sessions-config.json from repo_root/sessions/
+        src_cfg = (src_path / 'sessions' / 'sessions-config.json')
+        dst_cfg = (project_root / 'sessions' / 'sessions-config.json')
+        if src_cfg.exists():
+            dst_cfg.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_cfg, dst_cfg)
+            print(color('✓ Imported sessions-config.json', Colors.GREEN))
+            imported_any = True
+        else: print(color('No sessions-config.json found to import at sessions/sessions-config.json', Colors.YELLOW))
+
+        # Agents: present baseline agent files for choice
+        src_agents = src_path / '.claude' / 'agents'
+        dst_agents = project_root / '.claude' / 'agents'
+        if src_agents.exists():
+            for agent_name in AGENT_BASELINE:
+                src_file = src_agents / agent_name
+                dst_file = dst_agents / agent_name
+                if src_file.exists():
+                    choice = inquirer.list_input(
+                        message=f"Agent '{agent_name}' found in import. Which version to keep?",
+                        choices=['Use imported version', 'Keep default']
+                    )
+                    if choice == 'Use imported version':
+                        dst_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(src_file, dst_file)
+                        print(color(f"✓ Imported agent: {agent_name}", Colors.GREEN))
+                        imported_any = True
+        else: print(color('No .claude/agents directory found to import agents from', Colors.YELLOW))
+
+        # Reload config/state
+        setup_shared_state_and_initialize(project_root)
+        return imported_any
+    except Exception as e:
+        print(color(f'Import failed: {e}', Colors.RED))
+        return False
+    finally:
+        if tmp_to_remove is not None:
+            with contextlib.suppress(Exception): shutil.rmtree(tmp_to_remove)
+
+def kickstart_decision(project_root: Path) -> str:
+    """Prompt user for kickstart onboarding preference and set state/cleanup accordingly.
+    Returns one of: 'full', 'subagents', 'skip'.
+    """
+    print_kickstart_header()
+
+    print("cc-sessions is an opinionated interactive workflow. You can learn how to use")
+    print("it with Claude Code via a custom \"session\" called kickstart.\n")
+    print("Kickstart will:")
+    print("  • Teach you the features of cc-sessions")
+    print("  • Help you set up your first task")
+    print("  • Show the 4 core protocols you can run")
+    print("  • Help customize subagents for your codebase\n")
+    print("Time: 15–30 minutes\n")
+
+    choice = inquirer.list_input(
+        message="Would you like to run kickstart on your first session?",
+        choices=[
+            'Yes (auto-start full kickstart tutorial)',
+            'Just subagents (customize subagents but skip tutorial)',
+            'No (skip tutorial, remove kickstart files)'
+        ]
+    )
+
+    if 'Yes' in choice:
+        with ss.edit_state() as s: s.metadata['kickstart'] = {'mode': 'full'}
+        print(color('\n✓ Kickstart will auto-start on your first session', Colors.GREEN))
+        return 'full'
+
+    if 'Just subagents' in choice:
+        with ss.edit_state() as s: s.metadata['kickstart'] = {'mode': 'subagents'}
+        print(color('\n✓ Kickstart will guide you through subagent customization only', Colors.GREEN))
+        return 'subagents'
+
+    # Skip
+    print(color('\n⏭️  Skipping kickstart onboarding...', Colors.CYAN))
+    kickstart_cleanup(project_root)
+    print(color('\n✓ Kickstart files removed', Colors.GREEN))
+    return 'skip'
+##-##
+
 #-#
 
 # ===== ENTRYPOINT ===== #
@@ -1184,43 +1639,33 @@ def main():
     print()
 
     try:
-        #!> Install files
-        install_package_files(SCRIPT_DIR, PROJECT_ROOT)
-        # Create directory structure
+        # Phase: install files
         create_directory_structure(PROJECT_ROOT)
-
-        # Copy files
         copy_files(SCRIPT_DIR, PROJECT_ROOT)
-
-        # Configure .claude/settings.json
         configure_settings(PROJECT_ROOT)
-
-        # Add reference to CLAUDE.md
         configure_claude_md(PROJECT_ROOT)
-
-        # Configure .gitignore
         configure_gitignore(PROJECT_ROOT)
 
-        # Initialize state and config files
-        initialize_state_files(PROJECT_ROOT)
-        #!<
+        # Phase: load shared state and initialize defaults
+        setup_shared_state_and_initialize(PROJECT_ROOT)
 
-        # Import and call load_state/load_config/edit_config from shared_state
-        try: import shared_state as ss
-        except ImportError as e:
-            print(color('⚠️  Could not import shared_state module. File copying may have failed.', Colors.YELLOW))
-            print(color(f'Error: {e}', Colors.YELLOW))
-            sys.exit(1)
+        # Phase: decision point (import vs full config)
+        did_import = installer_decision_flow(PROJECT_ROOT)
 
-        # Run installer decision flow (first-time detection, config, kickstart)
-        kickstart_mode = installer_decision_flow(PROJECT_ROOT)
+        # Phase: configuration
+        if did_import: run_config_editor() # Present config editor so user can tweak imported settings
+        else: run_full_configuration()
 
+        # Phase: kickstart decision
+        kickstart_mode = kickstart_decision(PROJECT_ROOT)
+        
         # Restore tasks if this was an update
         if backup_dir:
             restore_tasks(PROJECT_ROOT, backup_dir)
             print(color(f'\n📁 Backup saved at: {backup_dir.relative_to(PROJECT_ROOT)}/', Colors.CYAN))
             print(color('   (Agents backed up for manual restoration if needed)', Colors.CYAN))
 
+        # Output final message
         print(color('\n✅ cc-sessions installed successfully!\n', Colors.GREEN))
         print(color('Next steps:', Colors.BOLD))
         print('  1. Restart your Claude Code session (or run /clear)')
@@ -1234,8 +1679,8 @@ def main():
             print('     - Try "mek: my first task" to create a task')
             print('     - Type "help" to see available commands\n')
 
-        if backup_dir:
-            print(color('Note: Check backup/ for any custom agents you want to restore\n', Colors.CYAN))
+        if backup_dir: print(color('Note: Check backup/ for any custom agents you want to restore\n', Colors.CYAN))
+
 
     except Exception as error:
         print(color(f'\n❌ Installation failed: {error}', Colors.RED), file=sys.stderr)
@@ -1244,87 +1689,44 @@ def main():
         sys.exit(1)
 
 
-
-def truncated_configuration(project_root):
-    sys.path.insert(0, str(project_root / 'sessions' / 'hooks'))
-    from shared_state import edit_state, edit_config, load_config
-
-    CONFIG = load_config()
-    # TODO: Were not done here
-    pass
-
 def installer_decision_flow(project_root):
     """
-    Interactive decision flow for installer configuration and kickstart setup.
-    Handles first-time detection, config import, interactive configuration, and kickstart choice.
+    Decision point: detect returning users and optionally import config/agents.
+    Returns True if a config import occurred and succeeded.
     """
     print_installer_header()
 
-    #!> First-time user detection + config/agents import
+    did_import = False
     first_time = inquirer.list_input(message="Is this your first time using cc-sessions?", choices=['Yes', 'No'])
 
-    did_import = False
-
     if first_time == 'No':
-        # Version detection for existing users
-        version_check = inquirer.list_input(message="Have you used cc-sessions v0.3.0 or later (released October 2025)?", choices=['Yes', 'No'])
-
+        version_check = inquirer.list_input(
+            message="Have you used cc-sessions v0.3.0 or later (released October 2025)?",
+            choices=['Yes', 'No']
+        )
         if version_check == 'Yes':
-            # Config/agent import workflow
-            import_choice = inquirer.list_input(message="Would you like to import your configuration and agents?", choices=['Yes', 'No'])
-
+            import_choice = inquirer.list_input(
+                message="Would you like to import your configuration and agents?",
+                choices=['Yes', 'No']
+            )
             if import_choice == 'Yes':
-                import_source = inquirer.list_input(message="Where is your cc-sessions configuration?", choices=['Local directory', 'Git repository URL', 'Skip import'])
-
+                import_source = inquirer.list_input(
+                    message="Where is your cc-sessions configuration?",
+                    choices=['Local directory', 'Git repository URL', 'GitHub stub (owner/repo)', 'Skip import']
+                )
                 if import_source != 'Skip import':
                     source_path = input(color("Path or URL: ", Colors.CYAN)).strip()
-                    import_config(source_path) # [PLACEHOLDER] Import config and agents, then present for interactive modification
-                    # TODO: Implement config import with interactive modification feature
-                else: print(color('\nSkipping import. Continuing with configuration...', Colors.CYAN))
-            else: print(color('\nContinuing with configuration...', Colors.CYAN))
-        else: print(color('\nContinuing with configuration...', Colors.CYAN))
-    #!<
+                    did_import = import_config(project_root, source_path, import_source)
+                    if not did_import:
+                        print(color('\nImport failed or not implemented. Continuing with configuration...', Colors.YELLOW))
+                else:
+                    print(color('\nSkipping import. Continuing with configuration...', Colors.CYAN))
+            else:
+                print(color('\nContinuing with configuration...', Colors.CYAN))
+        else:
+            print(color('\nContinuing with configuration...', Colors.CYAN))
 
-    # Run interactive configuration if we didn't import
-    if not did_import: config = interactive_configuration(project_root)
-    else: truncated_configuration(project_root)
-
-    #!> Kickstart decision
-    print_kickstart_header()
-
-    print("cc-sessions is an opinionated interactive workflow. You can learn how to use")
-    print("it *with* Claude Code - we built a custom \"session\" called kickstart.\n")
-    print("Kickstart will:")
-    print("  • Teach you the features of cc-sessions")
-    print("  • Help you set up your first task")
-    print("  • Show you the 4 core protocols you can run")
-    print("  • Help you customize cc-sessions subagents for your codebase\n")
-    print("Time: 15-30 minutes\n")
-
-    kickstart_choice = inquirer.list_input(
-        message="Would you like to run kickstart on your first session?",
-        choices=['Yes (auto-start full kickstart tutorial)', 'Just subagents (customize subagents but skip tutorial)', 'No (skip tutorial, remove kickstart files)'])
-
-    if 'Yes' in kickstart_choice:
-        # Set metadata for full kickstart mode
-        with ss.edit_state() as s: s.metadata['kickstart'] = {'mode': 'full'}
-        print(color('\n✓ Kickstart will auto-start on your first session', Colors.GREEN))
-
-    elif 'Just subagents' in kickstart_choice:
-        # Set metadata for subagents-only mode
-        with edit_state() as s: s.metadata['kickstart'] = {'mode': 'subagents'}
-        print(color('\n✓ Kickstart will guide you through subagent customization only', Colors.GREEN))
-
-    else:  # No - skip kickstart
-        # Don't set any metadata, run cleanup immediately
-        print(color('\n⏭️  Skipping kickstart onboarding...', Colors.CYAN))
-        kickstart_cleanup(project_root)
-        print(color('\n✓ Kickstart files removed', Colors.GREEN))
-
-    # Return kickstart choice for success message
-    if 'Yes' in kickstart_choice: return 'full'
-    elif 'Just subagents' in kickstart_choice: return 'subagents'
-    else: return 'skip'
+    return did_import
 
 #-#
 
@@ -1336,6 +1738,7 @@ if __name__ == '__main__':
         import traceback
         traceback.print_exc()
         sys.exit(1)
+#-#
 
 # Enter and set global, SCRIPT_DIR, and PROJECT_ROOT
 # Check for previous installation, throw to backup if needed
