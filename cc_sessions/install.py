@@ -3,7 +3,7 @@
 # ===== IMPORTS ===== #
 
 ## ===== STDLIB ===== ##
-import shutil, json, sys, os, subprocess, tempfile, contextlib, re
+import shutil, json, sys, os, subprocess, tempfile, contextlib, re, io, builtins
 from pathlib import Path
 from time import sleep
 ##-##
@@ -17,6 +17,9 @@ import inquirer
 ## ===== LOCAL ===== ##
 ##-##
 
+#-#
+
+# ===== GLOBALS ===== #
 # Global shared_state handle (set after files are installed)
 ss = None
 
@@ -29,130 +32,27 @@ AGENT_BASELINE = [
     'service-documentation.md',
 ]
 
-# ===== Inquirer wrappers (j/k navigation) ===== #
-try:
-    import curses
-    _CURSES_AVAILABLE = True
-except Exception:
-    _CURSES_AVAILABLE = False
+# ===== TUI + Inquirer wrappers (j/k navigation) ===== #
+PADDING_TOP = 1
+PADDING_LEFT = 3
+# Top padding inside the body pane for prompts/logs
+BODY_TOP_PAD = 0
+
+_TUI_ACTIVE = False
+_TUI = None  # type: ignore
+try: import curses; _CURSES_AVAILABLE = True
+except Exception: _CURSES_AVAILABLE = False
 
 _ORIG_LIST_INPUT = getattr(inquirer, 'list_input', None)
 _ORIG_CHECKBOX = getattr(inquirer, 'checkbox', None)
+_ORIG_INPUT = builtins.input
 
 _ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 def _strip_ansi(s):
-    try:
-        return _ANSI_RE.sub('', s)
+    try: return _ANSI_RE.sub('', s)
     except Exception:
         try: return str(s)
         except Exception: return ''
-
-def _jk_list_input(message: str, choices, default=None):
-    if not _CURSES_AVAILABLE or not sys.stdin.isatty() or _ORIG_LIST_INPUT is None:
-        return _ORIG_LIST_INPUT(message=message, choices=choices, default=default)
-
-    def _run(stdscr):
-        curses.curs_set(0)
-        stdscr.keypad(True)
-        height, width = stdscr.getmaxyx()
-        title = message if isinstance(message, str) else str(message)
-        opts = list(choices)
-        disp_opts = [_strip_ansi(str(x)) for x in opts]
-        idx = 0
-        if default is not None:
-            try: idx = opts.index(default)
-            except Exception: pass
-        scroll = 0
-        max_visible = max(3, height - 4)
-
-        while True:
-            stdscr.clear()
-            stdscr.addstr(0, 0, title[:width-1])
-            stdscr.addstr(1, 0, "Use j/k or arrows • Enter to select • Ctrl+C to exit")
-
-            if idx < scroll: scroll = idx
-            elif idx >= scroll + max_visible: scroll = idx - max_visible + 1
-
-            for i in range(scroll, min(len(opts), scroll + max_visible)):
-                disp = disp_opts[i]
-                prefix = '> ' if i == idx else '  '
-                text = f"{prefix}{disp}"
-                if i == idx:
-                    stdscr.addstr(2 + i - scroll, 0, text[:width-1], curses.A_REVERSE)
-                else:
-                    stdscr.addstr(2 + i - scroll, 0, text[:width-1])
-
-            key = stdscr.getch()
-            if key in (curses.KEY_UP, ord('k')):
-                idx = (idx - 1) % len(opts)
-            elif key in (curses.KEY_DOWN, ord('j')):
-                idx = (idx + 1) % len(opts)
-            elif key in (curses.KEY_ENTER, 10, 13):
-                return opts[idx]
-            elif key in (3, 27):
-                raise KeyboardInterrupt
-
-    return curses.wrapper(_run)
-
-def _jk_checkbox(message: str, choices, default=None):
-    if not _CURSES_AVAILABLE or not sys.stdin.isatty() or _ORIG_CHECKBOX is None:
-        return _ORIG_CHECKBOX(message=message, choices=choices, default=default)
-
-    def _run(stdscr):
-        curses.curs_set(0)
-        stdscr.keypad(True)
-        height, width = stdscr.getmaxyx()
-        title = message if isinstance(message, str) else str(message)
-        opts = list(choices)
-        disp_opts = [_strip_ansi(str(x)) for x in opts]
-        checked = set(default or [])
-        idx = 0
-        scroll = 0
-        max_visible = max(3, height - 5)
-        legend = "j/k or arrows move • Space toggles • Enter submit • Ctrl+C exits"
-
-        while True:
-            stdscr.clear()
-            stdscr.addstr(0, 0, title[:width-1])
-            stdscr.addstr(1, 0, legend[:width-1])
-
-            if idx < scroll: scroll = idx
-            elif idx >= scroll + max_visible: scroll = idx - max_visible + 1
-
-            for i in range(scroll, min(len(opts), scroll + max_visible)):
-                line = opts[i]
-                disp = disp_opts[i]
-                mark = '[x]' if line in checked else '[ ]'
-                pointer = '> ' if i == idx else '  '
-                text = f"{pointer}{mark} {disp}"
-                if i == idx:
-                    stdscr.addstr(2 + i - scroll, 0, text[:width-1], curses.A_REVERSE)
-                else:
-                    stdscr.addstr(2 + i - scroll, 0, text[:width-1])
-
-            key = stdscr.getch()
-            if key in (curses.KEY_UP, ord('k')):
-                idx = (idx - 1) % len(opts)
-            elif key in (curses.KEY_DOWN, ord('j')):
-                idx = (idx + 1) % len(opts)
-            elif key in (ord(' '),):
-                cur = opts[idx]
-                if cur in checked: checked.remove(cur)
-                else: checked.add(cur)
-            elif key in (curses.KEY_ENTER, 10, 13):
-                return [o for o in opts if o in checked]
-            elif key in (3, 27):
-                raise KeyboardInterrupt
-
-    return curses.wrapper(_run)
-
-try:
-    if _ORIG_LIST_INPUT is not None:
-        inquirer.list_input = _jk_list_input  # type: ignore
-    if _ORIG_CHECKBOX is not None:
-        inquirer.checkbox = _jk_checkbox  # type: ignore
-except Exception:
-    pass
 
 #-#
 
@@ -179,9 +79,458 @@ class Colors:
     GREEN = '\033[32m'
     YELLOW = '\033[33m'
     CYAN = '\033[36m'
+    GRAY = '\033[38;5;240m'
     BOLD = '\033[1m'
 ##-##
 
+#-#
+
+# ===== CLASSES ===== #
+class TuiManager:
+    def __init__(self, stdscr):
+        self.stdscr = stdscr
+        self.header_lines = []
+        self.legend = ''
+        self.log = []
+        self.in_prompt = False
+        self.info_lines: list[str] = []
+        self._pair_map: dict[int, int] = {}
+        self._next_pair_id = 10
+        # Initialize colors
+        try:
+            curses.start_color()
+            try: curses.use_default_colors()
+            except Exception: pass
+            curses.init_pair(1, curses.COLOR_GREEN, -1)
+            curses.init_pair(2, curses.COLOR_CYAN, -1)
+            curses.init_pair(3, curses.COLOR_YELLOW, -1)
+            curses.init_pair(4, curses.COLOR_RED, -1)
+            curses.init_pair(5, curses.COLOR_BLACK, -1)
+        except Exception:
+            pass
+        self._build_windows()
+
+    def _calc_header_h(self, total_h):
+        footer_h = 1
+        min_body = 6
+        max_header = max(3, total_h - footer_h - min_body)
+        # Include vertical top padding for header content
+        needed = max(3, len(self.header_lines) + PADDING_TOP)
+        return min(needed, max_header)
+
+    def _build_windows(self, header_h=None):
+        self.stdscr.clear()
+        self.stdscr.refresh()
+        h, w = self.stdscr.getmaxyx()
+        if header_h is None:
+            header_h = self._calc_header_h(h)
+        footer_h = 1
+        body_h = max(1, h - header_h - footer_h)
+        self.header_win = curses.newwin(header_h, w, 0, 0)
+        self.body_win = curses.newwin(body_h, w, header_h, 0)
+        self.footer_win = curses.newwin(footer_h, w, header_h + body_h, 0)
+        self.redraw_all()
+
+    def set_header(self, lines):
+        self.header_lines = [str(x) for x in lines]
+        # Resize header to fit content, preserving minimum body height
+        try:
+            total_h, _ = self.stdscr.getmaxyx()
+            desired = self._calc_header_h(total_h)
+            current = self.header_win.getmaxyx()[0]
+            # Only grow, never shrink header height within a session to avoid jumping
+            if desired > current:
+                self._build_windows(desired)
+            else:
+                self.redraw_header()
+        except Exception:
+            self.redraw_header()
+
+    def set_legend(self, txt):
+        self.legend = txt or ''
+        self.redraw_footer()
+
+    def set_info(self, lines: list[str] | None):
+        self.info_lines = [str(x) for x in (lines or [])]
+        # When not in a prompt, refresh body to show info
+        if not self.in_prompt:
+            self.redraw_body(mode='log')
+
+    def clear_info(self):
+        self.set_info([])
+
+    def log_line(self, line):
+        if self.in_prompt:
+            self.log.append(line)
+            return
+        self.log.append(line)
+        self.redraw_body(mode='log')
+
+    def clear_body(self):
+        self.body_win.erase()
+        self.body_win.refresh()
+
+    def redraw_header(self):
+        self.header_win.erase()
+        max_h, max_w = self.header_win.getmaxyx()
+        # Respect PADDING_TOP at the top of the header window
+        max_lines = max_h - PADDING_TOP
+        for i, raw in enumerate(self.header_lines[: max_lines]):
+            try:
+                self._addstr_ansi(self.header_win, PADDING_TOP + i, PADDING_LEFT, raw, width=max_w - PADDING_LEFT - 1)
+            except Exception:
+                pass
+        self.header_win.refresh()
+
+    def redraw_footer(self):
+        self.footer_win.erase()
+        text = self.legend or ''
+        try:
+            # Apply consistent side padding for legend
+            max_w = self.footer_win.getmaxyx()[1]
+            self.footer_win.addstr(0, PADDING_LEFT, text[: max_w - PADDING_LEFT - 1])
+        except Exception:
+            pass
+        self.footer_win.refresh()
+
+    def redraw_body(self, mode='log', list_state=None):
+        self.body_win.erase()
+        h, w = self.body_win.getmaxyx()
+        if mode == 'log':
+            # Show info lines first, then recent log lines below
+            y = BODY_TOP_PAD
+            for il in self.info_lines:
+                try:
+                    self._addstr_ansi(self.body_win, y, PADDING_LEFT, il, width=w - PADDING_LEFT - 1)
+                except Exception:
+                    pass
+                y += 1
+
+            usable = max(0, h - y)
+            start = max(0, len(self.log) - usable)
+            visible = self.log[start: start + usable]
+            for i, line in enumerate(visible):
+                try:
+                    self._addstr_ansi(self.body_win, y + i, PADDING_LEFT, line, width=w - PADDING_LEFT - 1)
+                except Exception:
+                    pass
+        elif mode == 'list' and list_state:
+            title, options, idx, scroll = list_state
+            y = BODY_TOP_PAD
+            for il in self.info_lines:
+                try: self._addstr_ansi(self.body_win, y, PADDING_LEFT, il, width=w - PADDING_LEFT - 1)
+                except Exception: pass
+                y += 1
+            try: self._addstr_ansi(self.body_win, y, PADDING_LEFT, title, width=w - PADDING_LEFT - 1)
+            except Exception: pass
+            max_visible = max(1, h - (y + 2))
+            if idx < scroll: scroll = idx
+            elif idx >= scroll + max_visible: scroll = idx - max_visible + 1
+            for i in range(scroll, min(len(options), scroll + max_visible)):
+                disp = options[i]
+                prefix = '> ' if i == idx else '  '
+                text = f"{prefix}{disp}"
+                try:
+                    row = y + 1 + i - scroll
+                    if i == idx:
+                        self._addstr_ansi(self.body_win, row, PADDING_LEFT, text, width=w - PADDING_LEFT - 1, attr_extra=curses.A_BOLD)
+                    else:
+                        self._addstr_ansi(self.body_win, row, PADDING_LEFT, text, width=w - PADDING_LEFT - 1)
+                except Exception: pass
+        elif mode == 'checkbox' and list_state:
+            title, options, checked_set, idx, scroll = list_state
+            y = BODY_TOP_PAD
+            for il in self.info_lines:
+                try: self._addstr_ansi(self.body_win, y, PADDING_LEFT, il, width=w - PADDING_LEFT - 1)
+                except Exception: pass
+                y += 1
+            try: self._addstr_ansi(self.body_win, y, PADDING_LEFT, title, width=w - PADDING_LEFT - 1)
+            except Exception: pass
+            max_visible = max(1, h - (y + 2))
+            if idx < scroll: scroll = idx
+            elif idx >= scroll + max_visible: scroll = idx - max_visible + 1
+            for i in range(scroll, min(len(options), scroll + max_visible)):
+                disp = options[i]
+                mark = '[x]' if options[i] in checked_set else '[ ]'
+                pointer = '> ' if i == idx else '  '
+                text = f"{pointer}{mark} {disp}"
+                try:
+                    row = y + 1 + i - scroll
+                    if i == idx:
+                        self._addstr_ansi(self.body_win, row, PADDING_LEFT, text, width=w - PADDING_LEFT - 1, attr_extra=curses.A_BOLD)
+                    else:
+                        self._addstr_ansi(self.body_win, row, PADDING_LEFT, text, width=w - PADDING_LEFT - 1)
+                except Exception: pass
+        self.body_win.refresh()
+
+    def resize(self):
+        curses.update_lines_cols()
+        total_h, _ = self.stdscr.getmaxyx()
+        footer_h = 1
+        min_body = 6
+        allowed_max = max(3, total_h - footer_h - min_body)
+        current = self.header_win.getmaxyx()[0]
+        new_h = min(current, allowed_max)
+        self._build_windows(new_h)
+
+    def list_prompt(self, message, choices, default=None):
+        self.in_prompt = True
+        opts = list(choices)
+        idx = 0
+        if default is not None:
+            try: idx = opts.index(default)
+            except Exception: pass
+        scroll = 0
+        self.set_legend('j/k or arrows • Enter select • Ctrl+C exit')
+        title = message if isinstance(message, str) else str(message)
+        while True:
+            self.redraw_body(mode='list', list_state=(title, opts, idx, scroll))
+            key = self.stdscr.getch()
+            if key == curses.KEY_RESIZE:
+                self.resize(); continue
+            if key in (curses.KEY_UP, ord('k')): idx = (idx - 1) % len(opts)
+            elif key in (curses.KEY_DOWN, ord('j')): idx = (idx + 1) % len(opts)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                self.in_prompt = False
+                self.set_legend('')
+                self.redraw_body(mode='log')
+                return opts[idx]
+            elif key in (3, 27):
+                self.in_prompt = False
+                self.set_legend('')
+                self.redraw_body(mode='log')
+                raise KeyboardInterrupt
+
+    def checkbox_prompt(self, message, choices, default=None):
+        self.in_prompt = True
+        opts = list(choices)
+        checked = set(default or [])
+        def _is_checked(item):
+            return item in checked or _strip_ansi(str(item)) in checked
+        checked_set = set(o for o in opts if _is_checked(o))
+        idx = 0
+        scroll = 0
+        self.set_legend('j/k or arrows • Space toggle • Enter submit • Ctrl+C exit')
+        title = message if isinstance(message, str) else str(message)
+        while True:
+            self.redraw_body(mode='checkbox', list_state=(title, opts, checked_set, idx, scroll))
+            key = self.stdscr.getch()
+            if key == curses.KEY_RESIZE:
+                self.resize(); continue
+            if key in (curses.KEY_UP, ord('k')): idx = (idx - 1) % len(opts)
+            elif key in (curses.KEY_DOWN, ord('j')): idx = (idx + 1) % len(opts)
+            elif key in (ord(' '),):
+                cur = opts[idx]
+                if cur in checked_set: checked_set.remove(cur)
+                else: checked_set.add(cur)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                self.in_prompt = False
+                self.set_legend('')
+                self.redraw_body(mode='log')
+                return [o for o in opts if o in checked_set]
+            elif key in (3, 27):
+                self.in_prompt = False
+                self.set_legend('')
+                self.redraw_body(mode='log')
+                raise KeyboardInterrupt
+
+    def text_input(self, prompt: str) -> str:
+        self.in_prompt = True
+        self.set_legend('Type • Enter submit • Ctrl+C cancel')
+        buf = ''
+        title = prompt if isinstance(prompt, str) else str(prompt)
+        while True:
+            self.body_win.erase()
+            h, w = self.body_win.getmaxyx()
+            y = BODY_TOP_PAD
+            for il in self.info_lines:
+                try: self._addstr_ansi(self.body_win, y, PADDING_LEFT, il, width=w - PADDING_LEFT - 1)
+                except Exception: pass
+                y += 1
+            try: self._addstr_ansi(self.body_win, y, PADDING_LEFT, title, width=w - PADDING_LEFT - 1)
+            except Exception: pass
+            line = buf + '_'
+            try: self._addstr_ansi(self.body_win, y + 1, PADDING_LEFT, line, width=w - PADDING_LEFT - 1)
+            except Exception: pass
+            self.body_win.refresh()
+            ch = self.stdscr.getch()
+            if ch == curses.KEY_RESIZE:
+                self.resize(); continue
+            if ch in (10, 13):
+                self.in_prompt = False
+                self.set_legend('')
+                self.redraw_body(mode='log')
+                return buf
+            if ch in (3, 27):
+                self.in_prompt = False
+                self.set_legend('')
+                self.redraw_body(mode='log')
+                raise KeyboardInterrupt
+            if ch in (curses.KEY_BACKSPACE, 127, 8):
+                buf = buf[:-1]
+            elif 0 <= ch < 256:
+                buf += chr(ch)
+
+    def redraw_all(self):
+        self.redraw_header(); self.redraw_body(mode='log'); self.redraw_footer()
+
+    def _addstr_ansi(self, win, y, x, text, *, width=None, attr_extra=0):
+        """Render a string with basic ANSI SGR (color/bold) into a curses window."""
+        if text is None: return
+        s = str(text)
+        pattern = re.compile(r"\x1b\[([0-9;]*)m")
+        pos = 0
+        col = x
+        max_w = win.getmaxyx()[1]
+        if width is None: width = max_w - x - 1
+        cur_color = 0
+        bold = False
+        dim = False
+        base_attr = curses.A_NORMAL
+        def get_attr():
+            attr = base_attr
+            if cur_color:
+                attr |= curses.color_pair(cur_color)
+            if bold:
+                attr |= curses.A_BOLD
+            if dim:
+                try: attr |= curses.A_DIM
+                except Exception: pass
+            if attr_extra:
+                attr |= attr_extra
+            return attr
+        for m in pattern.finditer(s):
+            chunk = s[pos:m.start()]
+            if chunk:
+                remain = width - (col - x)
+                if remain <= 0: break
+                out = chunk[:remain]
+                try: win.addstr(y, col, out, get_attr())
+                except Exception: pass
+                col += len(out)
+            params = m.group(1)
+            # Support 256-color form 38;5;N
+            had_256 = False
+            if params:
+                for mm in re.finditer(r'(?:^|;)38;5;(\d+)(?=;|$)', params):
+                    try:
+                        col_idx = int(mm.group(1))
+                        cur_color = self._pair_for_256(col_idx)
+                        had_256 = True
+                    except Exception:
+                        pass
+                # Remove any 38;5;N segments so the remaining split doesn't misinterpret
+                params = re.sub(r'(?:^|;)38;5;\d+(?=;|$)', '', params).strip(';')
+            if not params:
+                # If we only had a 256-color code, keep the chosen color (don't reset)
+                if not had_256:
+                    cur_color = 0; bold = False; dim = False
+            else:
+                for code in params.split(';'):
+                    if not code: continue
+                    try: n = int(code)
+                    except ValueError: continue
+                    if n == 0:
+                        cur_color = 0; bold = False; dim = False
+                    elif n == 1:
+                        bold = True
+                    elif n in (22,):
+                        bold = False
+                    elif n == 31:
+                        cur_color = 4  # red pair
+                    elif n == 32:
+                        cur_color = 1  # green pair
+                    elif n == 33:
+                        cur_color = 3  # yellow pair
+                    elif n == 36:
+                        cur_color = 2  # cyan pair
+                    elif n == 90:
+                        # bright black (gray). Use black + dim to approximate gray
+                        cur_color = 5; dim = True
+                    elif n == 39:
+                        cur_color = 0; dim = False
+            pos = m.end()
+        chunk = s[pos:]
+        if chunk and (col - x) < width:
+            out = chunk[: width - (col - x)]
+            try: win.addstr(y, col, out, get_attr())
+            except Exception: pass
+
+    def _pair_for_256(self, color_idx: int) -> int:
+        try:
+            if color_idx in self._pair_map:
+                return self._pair_map[color_idx]
+            # Only attempt if terminal supports many colors
+            if hasattr(curses, 'COLORS') and curses.COLORS >= 256:
+                pair_id = self._next_pair_id
+                # Avoid exceeding available pairs
+                if hasattr(curses, 'COLOR_PAIRS') and pair_id >= curses.COLOR_PAIRS:
+                    return 0
+                curses.init_pair(pair_id, color_idx, -1)
+                self._pair_map[color_idx] = pair_id
+                self._next_pair_id += 1
+                return pair_id
+        except Exception:
+            pass
+        # Fallback to cyan dim as a neutral-ish shade if unsupported
+        return 2
+
+class _TuiWriter:
+    def __init__(self, manager):
+        self.mgr = manager
+        self._buf = ''
+    def write(self, s):
+        if not s: return 0
+        self._buf += str(s)
+        while '\n' in self._buf:
+            line, self._buf = self._buf.split('\n', 1)
+            # Keep ANSI so TUI can render colors
+            self.mgr.log_line(line)
+        return len(s)
+    def flush(self):
+        if self._buf:
+            self.mgr.log_line(self._buf)
+            self._buf = ''
+
+class _TuiSession:
+    def __init__(self):
+        self._orig_out = sys.stdout
+        self._orig_err = sys.stderr
+        self._orig_input = builtins.input
+    def __enter__(self):
+        global _TUI_ACTIVE, _TUI
+        if not _CURSES_AVAILABLE or not sys.stdin.isatty():
+            _TUI_ACTIVE = False
+            return self
+        stdscr = curses.initscr()
+        curses.noecho(); curses.cbreak(); stdscr.keypad(True)
+        try: curses.curs_set(0)
+        except Exception: pass
+        try:
+            curses.start_color()
+            try: curses.use_default_colors()
+            except Exception: pass
+        except Exception:
+            pass
+        _TUI_ACTIVE = True
+        _TUI = TuiManager(stdscr)
+        sys.stdout = _TuiWriter(_TUI)
+        sys.stderr = _TuiWriter(_TUI)
+        builtins.input = lambda prompt='': _TUI.text_input(prompt)
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        global _TUI_ACTIVE, _TUI
+        try:
+            if _TUI_ACTIVE and _TUI is not None:
+                try: curses.curs_set(1)
+                except Exception: pass
+                curses.nocbreak(); _TUI.stdscr.keypad(False); curses.echo(); curses.endwin()
+        finally:
+            sys.stdout = self._orig_out
+            sys.stderr = self._orig_err
+            builtins.input = self._orig_input
+            _TUI_ACTIVE = False
+            _TUI = None
 #-#
 
 # ===== FUNCTIONS ===== #
@@ -235,20 +584,147 @@ def choices_filtered(choices):
     """Filter out falsy/None choices for inquirer inputs."""
     return [c for c in choices if c]
 
-def get_package_root() -> Path:
-    """Get the root directory of the installed cc_sessions package."""
-    return Path(__file__).parent
+def capture_header(printer_fn) -> list[str]:
+    buf = io.StringIO()
+    orig = sys.stdout
+    try:
+        sys.stdout = buf
+        printer_fn()
+    finally:
+        sys.stdout = orig
+    content = buf.getvalue()
+    # Keep ANSI so TUI can render colors in header
+    lines = [line.rstrip('\n') for line in content.splitlines()]
+    return lines
 
-def get_project_root() -> Path:
-    """Get the root directory where cc-sessions should be installed."""
-    return Path.cwd()
+def show_header(printer_fn) -> None:
+    if _TUI_ACTIVE and _TUI is not None:
+        try:
+            _TUI.set_header(capture_header(printer_fn))
+        except Exception:
+            # If capture fails, fall back to printing
+            printer_fn()
+    else:
+        printer_fn()
+
+def set_info(lines: list[str]) -> None:
+    if _TUI_ACTIVE and _TUI is not None:
+        _TUI.set_info(lines)
+    else:
+        for ln in lines:
+            print(ln)
+
+def clear_info() -> None:
+    if _TUI_ACTIVE and _TUI is not None:
+        _TUI.clear_info()
+
+def get_package_root() -> Path: return Path(__file__).parent
+
+def get_project_root() -> Path: return Path.cwd()
+
+def tui_session(): return _TuiSession()
+
+def _jk_list_input(message: str, choices, default=None):
+    if _TUI_ACTIVE and _TUI is not None: return _TUI.list_prompt(message, choices, default)
+    if not _CURSES_AVAILABLE or not sys.stdin.isatty() or _ORIG_LIST_INPUT is None: return _ORIG_LIST_INPUT(message=message, choices=choices, default=default)
+
+    def _run(stdscr):
+        curses.curs_set(0)
+        stdscr.keypad(True)
+        height, width = stdscr.getmaxyx()
+        title = message if isinstance(message, str) else str(message)
+        opts = list(choices)
+        disp_opts = [_strip_ansi(str(x)) for x in opts]
+        idx = 0
+        if default is not None:
+            try: idx = opts.index(default)
+            except Exception: pass
+        scroll = 0
+        max_visible = max(3, height - 4)
+
+        while True:
+            stdscr.clear()
+            stdscr.addstr(0, 0, title[:width-1])
+            stdscr.addstr(1, 0, "Use j/k or arrows • Enter to select • Ctrl+C to exit")
+
+            if idx < scroll: scroll = idx
+            elif idx >= scroll + max_visible: scroll = idx - max_visible + 1
+
+            for i in range(scroll, min(len(opts), scroll + max_visible)):
+                disp = disp_opts[i]
+                prefix = '> ' if i == idx else '  '
+                text = f"{prefix}{disp}"
+                if i == idx: stdscr.addstr(2 + i - scroll, 0, text[:width-1], curses.A_BOLD)
+                else: stdscr.addstr(2 + i - scroll, 0, text[:width-1])
+
+            key = stdscr.getch()
+            if key in (curses.KEY_UP, ord('k')): idx = (idx - 1) % len(opts)
+            elif key in (curses.KEY_DOWN, ord('j')): idx = (idx + 1) % len(opts)
+            elif key in (curses.KEY_ENTER, 10, 13): return opts[idx]
+            elif key in (3, 27): raise KeyboardInterrupt
+
+    return curses.wrapper(_run)
+
+def _jk_checkbox(message: str, choices, default=None):
+    if _TUI_ACTIVE and _TUI is not None: return _TUI.checkbox_prompt(message, choices, default)
+    if not _CURSES_AVAILABLE or not sys.stdin.isatty() or _ORIG_CHECKBOX is None: return _ORIG_CHECKBOX(message=message, choices=choices, default=default)
+
+    def _run(stdscr):
+        curses.curs_set(0)
+        stdscr.keypad(True)
+        height, width = stdscr.getmaxyx()
+        title = message if isinstance(message, str) else str(message)
+        opts = list(choices)
+        disp_opts = [_strip_ansi(str(x)) for x in opts]
+        checked = set(default or [])
+        idx = 0
+        scroll = 0
+        max_visible = max(3, height - 5)
+        legend = "j/k or arrows move • Space toggles • Enter submit • Ctrl+C exits"
+
+        while True:
+            stdscr.clear()
+            stdscr.addstr(0, 0, title[:width-1])
+            stdscr.addstr(1, 0, legend[:width-1])
+
+            if idx < scroll: scroll = idx
+            elif idx >= scroll + max_visible: scroll = idx - max_visible + 1
+
+            for i in range(scroll, min(len(opts), scroll + max_visible)):
+                line = opts[i]
+                disp = disp_opts[i]
+                mark = '[x]' if line in checked else '[ ]'
+                pointer = '> ' if i == idx else '  '
+                text = f"{pointer}{mark} {disp}"
+                if i == idx: stdscr.addstr(2 + i - scroll, 0, text[:width-1], curses.A_BOLD)
+                else: stdscr.addstr(2 + i - scroll, 0, text[:width-1])
+
+            key = stdscr.getch()
+            if key in (curses.KEY_UP, ord('k')): idx = (idx - 1) % len(opts)
+            elif key in (curses.KEY_DOWN, ord('j')): idx = (idx + 1) % len(opts)
+            elif key in (ord(' '),):
+                cur = opts[idx]
+                if cur in checked: checked.remove(cur)
+                else: checked.add(cur)
+            elif key in (curses.KEY_ENTER, 10, 13): return [o for o in opts if o in checked]
+            elif key in (3, 27): raise KeyboardInterrupt
+
+    return curses.wrapper(_run)
+
+try:
+    if _ORIG_LIST_INPUT is not None: inquirer.list_input = _jk_list_input  # type: ignore
+    if _ORIG_CHECKBOX is not None: inquirer.checkbox = _jk_checkbox  # type: ignore
+except Exception: pass
+
+
 ##-##
 
-## ===== KEY TEXT ===== ##
+## ===== ASCII BANNERS ===== ##
 
 #!> Main header
 def print_installer_header() -> None:
-    print(color('\n╔════════════════════════════════════════════════════════════╗', Colors.GREEN))
+    print()
+    print(color('╔════════════════════════════════════════════════════════════╗', Colors.GREEN))
     print(color('║ ██████╗██████╗██████╗██████╗██████╗ █████╗ ██╗  ██╗██████╗ ║', Colors.GREEN))
     print(color('║ ██╔═══╝██╔═══╝██╔═══╝██╔═══╝╚═██╔═╝██╔══██╗███╗ ██║██╔═══╝ ║',Colors.GREEN))
     print(color('║ ██████╗█████╗ ██████╗██████╗  ██║  ██║  ██║████╗██║██████╗ ║',Colors.GREEN))
@@ -261,13 +737,24 @@ def print_installer_header() -> None:
     print()
 #!<
 
-#!> Configuration header (removed)
+#!> Configuration header
 def print_config_header() -> None:
-    return
+    print()
+    print(color('╔══════════════════════════════════════════════╗',Colors.GREEN))
+    print(color('║  █████╗ █████╗ ██╗  ██╗██████╗██████╗ █████╗ ║',Colors.GREEN))
+    print(color('║ ██╔═══╝██╔══██╗███╗ ██║██╔═══╝╚═██╔═╝██╔═══╝ ║',Colors.GREEN))
+    print(color('║ ██║    ██║  ██║████╗██║█████╗   ██║  ██║     ║',Colors.GREEN))
+    print(color('║ ██║    ██║  ██║██╔████║██╔══╝   ██║  ██║ ██╗ ║',Colors.GREEN))
+    print(color('║ ╚█████╗╚█████╔╝██║╚███║██║    ██████╗╚█████║ ║',Colors.GREEN))
+    print(color('║  ╚════╝ ╚════╝ ╚═╝ ╚══╝╚═╝    ╚═════╝ ╚════╝ ║',Colors.GREEN))
+    print(color('╚════════════ quick config editor ═════════════╝',Colors.GREEN))
+    print()
+    print()
 #!<
 
 #!> Git preferences header
-def print_git_section() -> None:
+def print_git_section(editor: bool = False) -> None:
+    print()
     print(color('╔═════════════════════════════════════════════╗', Colors.GREEN))
     print(color('║ ██████╗ █████╗ ██╗ ██╗█████╗  █████╗██████╗ ║', Colors.GREEN))
     print(color('║ ██╔═══╝██╔══██╗██║ ██║██╔═██╗██╔═══╝██╔═══╝ ║', Colors.GREEN))
@@ -282,6 +769,7 @@ def print_git_section() -> None:
 
 #!> Environment settings header
 def print_env_section() -> None:
+    print()
     print(color('╔══════════════════════════════════════════════════════╗', Colors.GREEN))
     print(color('║ ██████╗██╗  ██╗██╗ ██╗██████╗█████╗  █████╗ ██╗  ██╗ ║', Colors.GREEN))
     print(color('║ ██╔═══╝███╗ ██║██║ ██║╚═██╔═╝██╔═██╗██╔══██╗███╗ ██║ ║', Colors.GREEN))
@@ -289,13 +777,14 @@ def print_env_section() -> None:
     print(color('║ ██╔══╝ ██╔████║╚████╔╝  ██║  ██╔═██╗██║  ██║██╔████║ ║', Colors.GREEN))
     print(color('║ ██████╗██║╚███║ ╚██╔╝ ██████╗██║ ██║╚█████╔╝██║╚███║ ║', Colors.GREEN))
     print(color('║ ╚═════╝╚═╝ ╚══╝  ╚═╝  ╚═════╝╚═╝ ╚═╝ ╚════╝ ╚═╝ ╚══╝ ║', Colors.GREEN))
-    print(color('╚════════════════ environment settings ════════════════╝', Colors.GREEN))
+    print(color('╚════════════ configure your environment ══════════════╝', Colors.GREEN))
     print()
     print()
 #!<
 
 #!> Tool blocking
 def print_blocking_header() -> None:
+    print()
     print(color('╔══════════════════════════════════════════════════════════════╗', Colors.GREEN))
     print(color('║ █████╗ ██╗      █████╗  █████╗██╗  ██╗██████╗██╗  ██╗ █████╗ ║', Colors.GREEN))
     print(color('║ ██╔═██╗██║     ██╔══██╗██╔═══╝██║ ██╔╝╚═██╔═╝███╗ ██║██╔═══╝ ║', Colors.GREEN))
@@ -310,6 +799,7 @@ def print_blocking_header() -> None:
 
 #!> Read only commands section
 def print_read_only_section() -> None:
+    print()
     print(color('╔═══════════════════════════════════════════════════════════════════╗', Colors.GREEN))
     print(color('║ █████╗ ██████╗ █████╗ █████╗       ██╗     ██████╗██╗  ██╗██████╗ ║', Colors.GREEN))
     print(color('║ ██╔═██╗██╔═══╝██╔══██╗██╔═██╗      ██║     ╚═██╔═╝██║ ██╔╝██╔═══╝ ║', Colors.GREEN))
@@ -324,6 +814,7 @@ def print_read_only_section() -> None:
 
 #!> Write-like commands section
 def print_write_like_section() -> None:
+    print()
     print(color("╔════════════════════════════════════════════════════════════════════════════╗",Colors.GREEN))
     print(color("║ ██╗    ██╗█████╗ ██████╗██████╗██████╗      ██╗     ██████╗██╗  ██╗██████╗ ║",Colors.GREEN))
     print(color("║ ██║    ██║██╔═██╗╚═██╔═╝╚═██╔═╝██╔═══╝      ██║     ╚═██╔═╝██║ ██╔╝██╔═══╝ ║",Colors.GREEN))
@@ -338,6 +829,7 @@ def print_write_like_section() -> None:
 
 #!> Extrasafe section
 def print_extrasafe_section() -> None:
+    print()
     print(color("╔════════════════════════════════════════════════════════════════════╗",Colors.GREEN))
     print(color("║ ██████╗██╗  ██╗██████╗█████╗  █████╗ ██████╗ █████╗ ██████╗██████╗ ║",Colors.GREEN))
     print(color("║ ██╔═══╝╚██╗██╔╝╚═██╔═╝██╔═██╗██╔══██╗██╔═══╝██╔══██╗██╔═══╝██╔═══╝ ║",Colors.GREEN))
@@ -352,6 +844,7 @@ def print_extrasafe_section() -> None:
 
 #!> Trigger phrases
 def print_triggers_header() -> None:
+    print()
     print(color('╔══════════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║ ██████╗█████╗ ██████╗ █████╗ █████╗██████╗█████╗ ██████╗ ║',Colors.GREEN))
     print(color('║ ╚═██╔═╝██╔═██╗╚═██╔═╝██╔═══╝██╔═══╝██╔═══╝██╔═██╗██╔═══╝ ║',Colors.GREEN))
@@ -366,6 +859,7 @@ def print_triggers_header() -> None:
 
 #!> Implementation mode triggers section
 def print_go_triggers_section() -> None:
+    print()
     print(color('╔══════════════════════════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║ ██████╗███╗  ███╗██████╗ ██╗     ██████╗███╗  ███╗██████╗██╗  ██╗██████╗ ║',Colors.GREEN))
     print(color('║ ╚═██╔═╝████╗████║██╔══██╗██║     ██╔═══╝████╗████║██╔═══╝███╗ ██║╚═██╔═╝ ║',Colors.GREEN))
@@ -380,6 +874,7 @@ def print_go_triggers_section() -> None:
 
 #!> Discussion mode triggers section
 def print_no_triggers_section() -> None:
+    print()
     print(color('╔═══════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║ █████╗ ██████╗██████╗ █████╗██╗ ██╗██████╗██████╗ ║',Colors.GREEN))
     print(color('║ ██╔═██╗╚═██╔═╝██╔═══╝██╔═══╝██║ ██║██╔═══╝██╔═══╝ ║',Colors.GREEN))
@@ -394,6 +889,7 @@ def print_no_triggers_section() -> None:
 
 #!> Create triggers section
 def print_create_section() -> None:
+    print()
     print(color('╔═════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║  █████╗█████╗ ██████╗ █████╗ ██████╗██████╗ ║',Colors.GREEN))
     print(color('║ ██╔═══╝██╔═██╗██╔═══╝██╔══██╗╚═██╔═╝██╔═══╝ ║',Colors.GREEN))
@@ -408,6 +904,7 @@ def print_create_section() -> None:
 
 #!> Startup triggers section
 def print_startup_section() -> None:
+    print()
     print(color('╔═════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║ ██████╗██████╗ █████╗ █████╗ ██████╗██╗ ██╗██████╗  ║',Colors.GREEN))
     print(color('║ ██╔═══╝╚═██╔═╝██╔══██╗██╔═██╗╚═██╔═╝██║ ██║██╔══██╗ ║',Colors.GREEN))
@@ -422,6 +919,7 @@ def print_startup_section() -> None:
 
 #!> Completion triggers section
 def print_complete_section() -> None:
+    print()
     print(color('╔════════════════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║  █████╗ █████╗ ███╗  ███╗██████╗ ██╗     ██████╗██████╗██████╗ ║',Colors.GREEN))
     print(color('║ ██╔═══╝██╔══██╗████╗████║██╔══██╗██║     ██╔═══╝╚═██╔═╝██╔═══╝ ║',Colors.GREEN))
@@ -436,6 +934,7 @@ def print_complete_section() -> None:
 
 #!> Compaction triggers section
 def print_compact_section() -> None:
+    print()
     print(color('╔═════════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║  █████╗ █████╗ ███╗  ███╗██████╗  █████╗  █████╗██████╗ ║',Colors.GREEN))
     print(color('║ ██╔═══╝██╔══██╗████╗████║██╔══██╗██╔══██╗██╔═══╝╚═██╔═╝ ║',Colors.GREEN))
@@ -450,6 +949,7 @@ def print_compact_section() -> None:
 
 #!> Feature toggles header
 def print_features_header() -> None:
+    print()
     print(color('╔═══════════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║ ██████╗██████╗ █████╗ ██████╗██╗ ██╗█████╗ ██████╗██████╗ ║',Colors.GREEN))
     print(color('║ ██╔═══╝██╔═══╝██╔══██╗╚═██╔═╝██║ ██║██╔═██╗██╔═══╝██╔═══╝ ║',Colors.GREEN))
@@ -464,6 +964,7 @@ def print_features_header() -> None:
 
 #!> Statusline header
 def print_statusline_header() -> None:
+    print()
     print(color('╔═══════════════════════════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║ ██████╗██████╗ █████╗ ██████╗██╗ ██╗██████╗██╗     ██████╗██╗  ██╗██████╗ ║',Colors.GREEN))
     print(color('║ ██╔═══╝╚═██╔═╝██╔══██╗╚═██╔═╝██║ ██║██╔═══╝██║     ╚═██╔═╝███╗ ██║██╔═══╝ ║',Colors.GREEN))
@@ -478,6 +979,7 @@ def print_statusline_header() -> None:
 
 #!> Kickstart header
 def print_kickstart_header() -> None:
+    print()
     print(color('╔════════════════════════════════════════════════════════════════════╗',Colors.GREEN))
     print(color('║ ██╗  ██╗██████╗ █████╗██╗  ██╗██████╗██████╗ █████╗ █████╗ ██████╗ ║',Colors.GREEN))
     print(color('║ ██║ ██╔╝╚═██╔═╝██╔═══╝██║ ██╔╝██╔═══╝╚═██╔═╝██╔══██╗██╔═██╗╚═██╔═╝ ║',Colors.GREEN))
@@ -945,63 +1447,50 @@ def restore_tasks(project_root, backup_dir):
 
 #!> Git preferences
 def _ask_default_branch():
-    print(color("cc-sessions uses git branches to section off task work and\nmerge back to your main work branch when the task is done.", Colors.CYAN))
-    print()
-    val = input("""When completing a task and merging the changes, Claude should
-merge to (ex. 'main', 'next', 'master', etc.): """) or 'main'
+    set_info([  color("cc-sessions uses git branches to section off task work and", Colors.CYAN),
+                color("merge back to your default work branch when the task is done.", Colors.CYAN), "",
+                "Set your default branch...", ""])
+    val = input("Claude should merge task branches to (ex. 'main', 'next', 'master', etc.): ") or 'main'
     with ss.edit_config() as conf: conf.git_preferences.default_branch = val
-    print()
-    sleep(0.3)
+    clear_info()
 
 def _ask_has_submodules():
-    val = inquirer.list_input(message="The repo you're installing into is a", choices=['Monorepo (no submodules)', 'Super-repo (has submodules)'])
+    val = inquirer.list_input(message="The repo you're installing into is a:", choices=['Monorepo (no submodules)', 'Super-repo (has submodules)'])
     with ss.edit_config() as conf: conf.git_preferences.has_submodules = ('Super-repo' in val)
-    print()
-    sleep(0.3)
 
 def _ask_git_add_pattern():
-    val = inquirer.list_input(message='When choosing what changes to stage and commit from completed tasks, Claude should', choices=['Ask me each time', 'Stage all modified files automatically'])
+    val = inquirer.list_input(message='When choosing what changes to stage and commit from completed tasks, Claude should:', choices=['Ask me each time', 'Stage all modified files automatically'])
     with ss.edit_config() as conf: conf.git_preferences.add_pattern = ss.GitAddPattern.ASK if 'Ask' in val else ss.GitAddPattern.ALL
-    print()
-    sleep(0.3)
 
 def _ask_commit_style():
-    val = inquirer.list_input(message="You want Claude's commit messages to be", choices=['Detailed (multi-line with description)', 'Conventional (type: subject format)', 'Simple (single line)'])
-    print()
-    sleep(0.3)
+    val = inquirer.list_input(message="You want Claude's commit messages to be:", choices=['Detailed (multi-line with description)', 'Conventional (type: subject format)', 'Simple (single line)'])
     with ss.edit_config() as conf:
         if 'Detailed' in val: conf.git_preferences.commit_style = ss.GitCommitStyle.OP
         elif 'Conventional' in val: conf.git_preferences.commit_style = ss.GitCommitStyle.REG
         else: conf.git_preferences.commit_style = ss.GitCommitStyle.SIMP
 
 def _ask_auto_merge():
-    print_git_section()
+    show_header(print_git_section)
     default_branch = ss.load_config().git_preferences.default_branch
-    val = inquirer.list_input(message='During task completion, after comitting changes, Claude should', choices=[f'Auto-merge to {default_branch}', f'Ask me if I want to merge to {default_branch}'])
+    val = inquirer.list_input(message='During task completion, after comitting changes, Claude should:', choices=[f'Auto-merge to {default_branch}', f'Ask me if I want to merge to {default_branch}'])
     with ss.edit_config() as conf: conf.git_preferences.auto_merge = ('Auto-merge' in val)
-    print()
-    sleep(0.3)
 
 def _ask_auto_push():
-    print_git_section()
-    val = inquirer.list_input(message='After committing/merging, Claude should', choices=['Auto-push to remote', 'Ask me if I want to push'])
+    show_header(print_git_section)
+    val = inquirer.list_input(message='After committing/merging, Claude should:', choices=['Auto-push to remote', 'Ask me if I want to push'])
     with ss.edit_config() as conf: conf.git_preferences.auto_push = ('Auto-push' in val)
-    print()
-    sleep(0.3)
 #!<
 
 #!> Environment settings
 def _ask_developer_name():
-    name = input(color("Claude should call you: ", Colors.CYAN)) or 'developer'
+    name = input("Claude should call you: ") or 'developer'
     with ss.edit_config() as conf: conf.environment.developer_name = name
-    print()
-    sleep(0.3)
 
 def _ask_os():
     os_name = platform.system()
     detected = {'Windows': 'windows', 'Linux': 'linux', 'Darwin': 'macos'}.get(os_name, 'linux')
     val = inquirer.list_input(
-        message=f"Detected OS [{detected.capitalize()}]",
+        message=f"Detected OS [{color(detected.capitalize(),Colors.YELLOW)}]",
         choices=choices_filtered([
             f'{detected.capitalize()} is correct',
             'Switch to Windows' if detected != 'windows' else None,
@@ -1014,13 +1503,11 @@ def _ask_os():
         elif 'macOS' in val: conf.environment.os = ss.UserOS.MACOS
         elif 'Linux' in val: conf.environment.os = ss.UserOS.LINUX
         else: conf.environment.os = ss.UserOS(detected)
-    print()
-    sleep(0.3)
 
 def _ask_shell():
     detected_shell = os.environ.get('SHELL', 'bash').split('/')[-1]
     val = inquirer.list_input(
-        message=f"Detected shell [{detected_shell}]",
+        message=f"Detected shell [{color(detected_shell,Colors.YELLOW)}]",
         choices=choices_filtered([
             f'{detected_shell} is correct',
             'Switch to bash' if detected_shell != 'bash' else None,
@@ -1039,78 +1526,71 @@ def _ask_shell():
         else:
             try: conf.environment.shell = ss.UserShell(detected_shell)
             except Exception: conf.environment.shell = ss.UserShell.BASH
-    print()
-    sleep(0.3)
 #!<
 
 #!> Blocked actions
 def _edit_bash_read_patterns():
-
-    print(color("In Discussion mode, Claude can only use read-like tools (including commands in",Colors.CYAN))
-    print(color("the Bash tool).\n", Colors.CYAN))
-    print(color("To do this, we parse Claude's Bash tool input in Discussion mode to check for", Colors.CYAN))
-    print(color("write-like and read-only bash commands from a known list.\n",Colors.CYAN))
-    print("You might have some CLI commands that you want to mark as \"safe\" to use in")
-    print("Discussion mode. For reference, here are the commands we already auto-approve")
-    print("in Discussion mode:\n")
-    print(color(', '.join(['cat', 'ls', 'pwd', 'cd', 'echo', 'grep', 'find', 'git status', 'git log',]),Colors.YELLOW))
-    print(color(', '.join(['git diff', 'docker ps', 'kubectl get', 'npm list', 'pip show', 'head', 'tail',]),Colors.YELLOW))
-    print(color(', '.join(['less', 'more', 'file', 'stat', 'du', 'df', 'ps', 'top', 'htop', 'who', 'w',]),Colors.YELLOW))
-    print(color('...(70+ commands total)', Colors.YELLOW))
-    print()
-    print("Type any additional command you would like to auto-allow in Discussion mode and")
-    print("hit \"enter\" to add it. You may add as many as you like. When you're done, hit")
-    print("enter again to move to the next configuration option:\n")
-
+    info = [    color("In Discussion mode, Claude can only use read-like tools (including commands in", Colors.CYAN),
+                color("the Bash tool).", Colors.CYAN),
+                color("To do this, we parse Claude's Bash tool input in Discussion mode to check for", Colors.CYAN),
+                color("write-like and read-only bash commands from a known list.", Colors.CYAN), "",
+                "You might have some CLI commands that you want to mark as \"safe\" to use in Discussion mode.",
+                "For reference, here are the commands we already auto-approve in Discussion mode:",
+                color(', '.join(['cat', 'ls', 'pwd', 'cd', 'echo', 'grep', 'find', 'git status', 'git log']), Colors.YELLOW),
+                color(', '.join(['git diff', 'docker ps', 'kubectl get', 'npm list', 'pip show', 'head', 'tail']), Colors.YELLOW),
+                color(', '.join(['less', 'more', 'file', 'stat', 'du', 'df', 'ps', 'top', 'htop', 'who', 'w']), Colors.YELLOW),
+                color('...(70+ commands total)', Colors.YELLOW), "",
+                "Type any additional command you would like to auto-allow and press Enter.",
+                "Press Enter on an empty line to finish.", ""]
+    set_info(info)
     custom_read = []
     while True:
-        cmd = input(color("> ", Colors.CYAN)).strip()
+        cmd = input().strip()
         if not cmd: break
         custom_read.append(cmd)
-        print(color(f"✓ Added '{cmd}' to read-only commands", Colors.GREEN))
+        added = [color(f"✓ Added {', '.join([cmd for cmd in custom_read[-5:]])}{f'... ({len(custom_read)} total)' if (len(custom_read) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
 
     with ss.edit_config() as conf: conf.blocked_actions.bash_read_patterns = custom_read
-    print()
-    sleep(0.3)
+    clear_info()
 
 def _edit_bash_write_patterns():
-
-    print(color("Similar to the read-only bash commands, we also check for write-like bash",Colors.CYAN))
-    print(color("commands during Discussion mode and block them.\n",Colors.CYAN))
-    print("You might have some CLI commands that you want to mark as \"blocked\" in")
-    print("Discussion mode. For reference, here are the commands we already block in")
-    print("Discussion mode:\n")
-    print(color(', '.join(['rm', 'mv', 'cp', 'chmod', 'chown', 'mkdir', 'rmdir', 'systemctl', 'service']),Colors.YELLOW))
-    print(color(', '.join(['apt', 'yum', 'npm install', 'pip install', 'make', 'cmake', 'sudo', 'kill']),Colors.YELLOW))
-    print(color('...(and more)',Colors.YELLOW))
-    print()
-    print("Type any additional command you would like blocked in Discussion mode and hit")
-    print("\"enter\" to add it. You may add as many as you like. When you're done, hit")
-    print("\"enter\" again to move to the next configuration option:\n")
-
+    info = [    color("Similar to the read-only bash commands, we also check for write-like bash", Colors.CYAN),
+                color("commands during Discussion mode and block them.", Colors.CYAN), "",
+                "You might have some CLI commands that you want to mark as blocked in Discussion mode.",
+                "For reference, here are the commands we already block in Discussion mode:",
+                color(', '.join(['rm', 'mv', 'cp', 'chmod', 'chown', 'mkdir', 'rmdir', 'systemctl', 'service']), Colors.YELLOW),
+                color(', '.join(['apt', 'yum', 'npm install', 'pip install', 'make', 'cmake', 'sudo', 'kill']), Colors.YELLOW),
+                color('...(and more)', Colors.YELLOW), "",
+                "Type any additional command you would like blocked and press Enter.",
+                "Press Enter on an empty line to finish.", ""]
+    set_info(info)
     custom_write = []
     while True:
-        cmd = input(color("> ", Colors.CYAN)).strip()
+        cmd = input().strip()
         if not cmd: break
         custom_write.append(cmd)
-        print(color(f"✓ Added '{cmd}' to write-like commands", Colors.GREEN))
+        added = [color(f"✓ Added {', '.join([cmd for cmd in custom_write[-5:]])}{f'... ({len(custom_write)} total)' if (len(custom_write) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
 
     with ss.edit_config() as conf: conf.blocked_actions.bash_write_patterns = custom_write
-    print()
-    sleep(0.3)
+    clear_info()
 
 def _ask_extrasafe_mode():
-    val = inquirer.list_input(message="What if Claude uses a bash command in discussion mode that's not in our\nread-only *or* our write-like list", choices=['Extrasafe OFF (allows unrecognized commands)', 'Extrasafe ON (blocks unrecognized commands)'])
+    info = [    color("What if Claude uses a bash command in discussion mode that's not in our",Colors.CYAN), 
+                color("read-only *or* our write-like list?",Colors.CYAN), "",
+                "The 'extrasafe' setting blocks patterns that aren't in our read-only list by default", ""]
+    set_info(info)
+    val = inquirer.list_input(message="If Claude uses an unknown Bash command, I want to", choices=['Block it (Extrasafe ON)', 'Allow it (Extrasafe OFF)'])
     with ss.edit_config() as conf: conf.blocked_actions.extrasafe = ('ON' in val)
-    print()
-    sleep(0.3)
+    clear_info()
 
 def _edit_blocked_tools():
-
-    print("Which Claude Code tools should be blocked in discussion mode?")
-    print(color("*Use Space to toggle, Enter to submit*\n", Colors.YELLOW))
-    print()
-    print(color("NOTE: Write-like Bash commands are already blocked",Colors.YELLOW))
+    set_info([  "Which Claude Code tools should be blocked in discussion mode?",
+                color("*Use Space to toggle, Enter to submit*", Colors.YELLOW),
+                color("NOTE: Write-like Bash commands are already blocked", Colors.YELLOW), ""])
 
     # Default blocked tools
     default_blocked = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
@@ -1126,30 +1606,25 @@ def _edit_blocked_tools():
         for t in blocked_tools:
             try: conf.blocked_actions.implementation_only_tools.append(ss.CCTools(t))
             except Exception: pass
-    print()
-    sleep(0.3)
+    clear_info()
 #!<
 
 #!> Trigger phrases
 def _customize_triggers() -> bool:
-    print("While you can drive cc-sessions using our slash command API, the preferred way")
-    print("is with (somewhat) natural language. To achieve this, we use unique trigger")
-    print("phrases that automatically activate the 4 protocols and 2 driving modes in")
-    print("cc-sessions:\n")
-    print(color("╔══════════════════════════════════════════════════════╗", Colors.YELLOW))
-    print(f"{color('║',Colors.YELLOW)}  • Switch to implementation mode {colors('(default: \"yert\")',Colors.GREEN)}   {color('║',Colors.YELLOW)}")
-    print(f"{color('║',Colors.YELLOW)}  • Switch to discussion mode {colors('(default: \"SILENCE\")',Colors.GREEN)}    {color('║',Colors.YELLOW)}")
-    print(f"{color('║',Colors.YELLOW)}  • Create a new task/task file {colors('(default: \"mek:\")',Colors.GREEN)}     {color('║',Colors.YELLOW)}")
-    print(f"{color('║',Colors.YELLOW)}  • Start a task/task file {colors('(default: \"start^:\")',Colors.GREEN)}       {color('║',Colors.YELLOW)}")
-    print(f"{color('║',Colors.YELLOW)}  • Close/complete current task {colors('(default: \"finito\")',Colors.GREEN)}   {color('║',Colors.YELLOW)}")
-    print(f"{color('║',Colors.YELLOW)}  • Compact context mid-task {colors('(default: \"squish\")',Colors.GREEN)}      {color('║',Colors.YELLOW)}")
-    print(color("╚══════════════════════════════════════════════════════╝",Colors.YELLOW))
-
-    customize_triggers = inquirer.list_input(
-        message="Would you like to add any of your own custom trigger phrases?",
-        choices=['Use defaults', 'Customize']
-    )
-
+    set_info([  color("While you can drive cc-sessions using our slash command API, the preferred way",Colors.CYAN),
+                color("is with (somewhat) natural language. To achieve this, we use unique trigger",Colors.CYAN),
+                color("phrases that automatically activate the 4 protocols and 2 driving modes in",Colors.CYAN),
+                color("cc-sessions:",Colors.CYAN),
+                color("╔══════════════════════════════════════════════════════╗", Colors.YELLOW),
+                f"{color('║',Colors.YELLOW)}  • Switch to implementation mode {color('(default: \"yert\")',Colors.GREEN)}   {color('║',Colors.YELLOW)}",
+                f"{color('║',Colors.YELLOW)}  • Switch to discussion mode {color('(default: \"SILENCE\")',Colors.GREEN)}    {color('║',Colors.YELLOW)}",
+                f"{color('║',Colors.YELLOW)}  • Create a new task/task file {color('(default: \"mek:\")',Colors.GREEN)}     {color('║',Colors.YELLOW)}",
+                f"{color('║',Colors.YELLOW)}  • Start a task/task file {color('(default: \"start^:\")',Colors.GREEN)}       {color('║',Colors.YELLOW)}",
+                f"{color('║',Colors.YELLOW)}  • Close/complete current task {color('(default: \"finito\")',Colors.GREEN)}   {color('║',Colors.YELLOW)}",
+                f"{color('║',Colors.YELLOW)}  • Compact context mid-task {color('(default: \"squish\")',Colors.GREEN)}      {color('║',Colors.YELLOW)}",
+                color("╚══════════════════════════════════════════════════════╝", Colors.YELLOW), ""])
+    customize_triggers = inquirer.list_input(message="Would you like to add any of your own custom trigger phrases?", choices=['Use defaults', 'Customize'])
+    clear_info()
     # Ensure sensible defaults exist in config
     with ss.edit_config() as conf:
         tp = conf.trigger_phrases
@@ -1160,147 +1635,159 @@ def _customize_triggers() -> bool:
         if not getattr(tp, 'task_startup', None): tp.task_startup = ['start^:']
         if not getattr(tp, 'task_completion', None): tp.task_completion = ['finito']
         if not getattr(tp, 'context_compaction', None): tp.context_compaction = ['squish']
-
-    print()
-    sleep(0.3)
     return (customize_triggers == 'Customize')
 
 
 def _edit_triggers_implementation():
-    print(color("The implementation mode trigger is used when Claude proposes todos for",Colors.CYAN))
-    print(color("implementation that you agree with. Once used, the user_messages hook will",Colors.CYAN))
-    print(color("automatically switch the mode to Implementation, notify Claude, and lock in the",Colors.CYAN))
-    print(color("proposed todo list to ensure Claude doesn't go rogue.\n",Colors.CYAN))
-    print()
-    print(color(   "╔════════════════════════════════════════════════════╗", Colors.YELLOW))
-    print(f"{color('║', Colors.YELLOW)}  To add your own custom trigger phrase, think of   {color('║', Colors.YELLOW)}")
-    print(f"{color('║', Colors.YELLOW)}  something that is:                                {color('║',Colors.YELLOW)}")
-    print(f"{color('║                                                    ║',Colors.YELLOW)}")
-    print(f"{color('║',Colors.YELLOW)}     • Easy to remember and type                    {color('║',Colors.YELLOW)}")
-    print(f"{color('║',Colors.YELLOW)}     • Won't ever come up in regular operation      {color('║',Colors.YELLOW)}")
-    print(color("╚════════════════════════════════════════════════════╝",Colors.YELLOW))
-    print()
-    print(color("We recommend using symbols or uppercase for trigger phrases that may otherwise",Colors.CYAN))
-    print(color("be used naturally in conversation (ex. instead of \"stop\", you might use \"STOP\"",Colors.CYAN))
-    print(color("or \"st0p\" or \"--stop\").\n",Colors.CYAN))
-    print(f"Current phrase: \"yert\"\n")
-    print("Type a trigger phrase to add and press \"enter\". When you're done, press \"enter\"")
-    print("again to move on to the next step:\n")
-
+    info = [    color("The implementation mode trigger is used when Claude proposes todos for", Colors.CYAN),
+                color("implementation that you agree with. Once used, the user_messages hook will", Colors.CYAN),
+                color("automatically switch the mode to Implementation, notify Claude, and lock in the", Colors.CYAN),
+                color("proposed todo list to ensure Claude doesn't go rogue.", Colors.CYAN), "",
+                color("╔════════════════════════════════════════════════════╗", Colors.YELLOW),
+                f"{color('║', Colors.YELLOW)}  To add your own custom trigger phrase, think of   {color('║', Colors.YELLOW)}",
+                f"{color('║', Colors.YELLOW)}  something that is:                                {color('║',Colors.YELLOW)}",
+                f"{color('║                                                    ║',Colors.YELLOW)}",
+                f"{color('║',Colors.YELLOW)}     • Easy to remember and type                    {color('║',Colors.YELLOW)}",
+                f"{color('║',Colors.YELLOW)}     • Won't ever come up in regular operation      {color('║',Colors.YELLOW)}",
+                color("╚════════════════════════════════════════════════════╝",Colors.YELLOW), "",
+                color("We recommend using symbols or uppercase for trigger phrases that may otherwise",Colors.CYAN),
+                color("be used naturally in conversation (ex. instead of \"stop\", you might use \"STOP\"",Colors.CYAN),
+                color("or \"st0p\" or \"--stop\").\n",Colors.CYAN), f"Current phrase: \"yert\"", "",
+                "Type a trigger phrase to add and press \"enter\". When you're done, press \"enter\"",
+                "again to move on to the next step:", ""]
+    set_info(info)
+    phrases = []
     while True:
-        phrase = input(color("> ", Colors.CYAN)).strip()
+        phrase = input().strip()
         if not phrase: break
-        with ss.edit_config() as conf:
-            conf.trigger_phrases.implementation_mode.append(phrase)
-        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
-    print()
-    sleep(0.3)
+        phrases.append(phrase)
+        with ss.edit_config() as conf: conf.trigger_phrases.implementation_mode.append(phrase)
+        added = [color(f"✓ Added {', '.join([p for p in phrases[-5:]])}{f'... ({len(phrases)} total)' if (len(phrases) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
+    clear_info()
 
 def _edit_triggers_discussion():
-    print(color("The discussion mode trigger is an emergency stop that immediately switches",Colors.CYAN))
-    print(color("Claude back to discussion mode. Once used, the user_messages hook will set the",Colors.CYAN))
-    print(color("mode to discussion and inform Claude that they need to re-align.\n",Colors.CYAN))
-    print(f"Current phrase: \"SILENCE\"\n")
-    print('Add discussion mode trigger phrases ("stop phrases"). Press Enter on empty line to finish.\n')
+    info = [    color("The discussion mode trigger is an emergency stop that immediately switches", Colors.CYAN),
+                color("Claude back to discussion mode. Once used, the user_messages hook will set the", Colors.CYAN),
+                color("mode to discussion and inform Claude that they need to re-align.", Colors.CYAN), "",
+                f"Current phrase: \"SILENCE\"",
+                'Add discussion mode trigger phrases ("stop phrases"). Press Enter on empty line to finish.']
+    set_info(info)
+    phrases = []
     while True:
-        phrase = input(color('> ', Colors.CYAN)).strip()
+        phrase = input().strip()
         if not phrase: break
+        phrases.append(phrase)
         with ss.edit_config() as conf: conf.trigger_phrases.discussion_mode.append(phrase)
-        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+        added = [color(f"✓ Added {', '.join([p for p in phrases[-5:]])}{f'... ({len(phrases)} total)' if (len(phrases) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
+    clear_info()
 
 def _edit_triggers_task_creation():
-    print(color("The task creation trigger activates the task creation protocol. Once used, the",Colors.CYAN))
-    print(color("user_messages hook will load the task creation protocol which guides Claude",Colors.CYAN))
-    print(color("through creating a properly structured task file with priority, success",Colors.CYAN))
-    print(color("criteria, and context manifest.\n",Colors.CYAN))
-    print(f"Current phrase: \"mek:\"\n")
-    print('Add task creation trigger phrases. Press Enter on empty line to finish.\n')
+    info = [    color("The task creation trigger activates the task creation protocol. Once used, the", Colors.CYAN),
+                color("user_messages hook will load the task creation protocol which guides Claude", Colors.CYAN),
+                color("through creating a properly structured task file with priority, success", Colors.CYAN),
+                color("criteria, and context manifest.", Colors.CYAN), "",
+                f"Current phrase: \"mek:\"", 'Add task creation trigger phrases. Press Enter on empty line to finish.', ""]
+    set_info(info)
+    phrases = []
     while True:
-        phrase = input(color('> ', Colors.CYAN)).strip()
+        phrase = input().strip()
         if not phrase: break
+        phrases.append(phrase)
         with ss.edit_config() as conf: conf.trigger_phrases.task_creation.append(phrase)
-        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
-    print()
-    sleep(0.3)
+        added = [color(f"✓ Added {', '.join([p for p in phrases[-5:]])}{f'... ({len(phrases)} total)' if (len(phrases) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
+    clear_info()
 
 def _edit_triggers_task_startup():
-    print(color("The task startup trigger activates the task startup protocol. Once used, the",Colors.CYAN))
-    print(color("user_messages hook will load the task startup protocol which guides Claude",Colors.CYAN))
-    print(color("through checking git status, creating branches, gathering context, and",Colors.CYAN))
-    print(color("proposing implementation todos.\n",Colors.CYAN))
-    print(f"Current phrase: \"start^:\"\n")
-    print('Add task startup trigger phrases. Press Enter on empty line to finish.\n')
+    info = [    color("The task startup trigger activates the task startup protocol. Once used, the", Colors.CYAN),
+                color("user_messages hook will load the task startup protocol which guides Claude", Colors.CYAN),
+                color("through checking git status, creating branches, gathering context, and", Colors.CYAN),
+                color("proposing implementation todos.", Colors.CYAN),"",
+                f"Current phrase: \"start^:\"",
+                'Add task startup trigger phrases. Press Enter on empty line to finish.']
+    set_info(info)
+    phrases = []
     while True:
-        phrase = input(color('> ', Colors.CYAN)).strip()
+        phrase = input().strip()
         if not phrase: break
+        phrases.append(phrase)
         with ss.edit_config() as conf: conf.trigger_phrases.task_startup.append(phrase)
-        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
+        added = [color(f"✓ Added {', '.join([p for p in phrases[-5:]])}{f'... ({len(phrases)} total)' if (len(phrases) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
 
 def _edit_triggers_task_completion():
-    print(color("The task completion trigger activates the task completion protocol. Once used,",Colors.CYAN))
-    print(color("the user_messages hook will load the task completion protocol which guides",Colors.CYAN))
-    print(color("Claude through running pre-completion checks, committing changes, merging to",Colors.CYAN))
-    print(color("main, and archiving the completed task.\n",Colors.CYAN))
-    print(f"Current phrase: \"finito\"\n")
-    print('Add task completion trigger phrases. Press Enter on empty line to finish.\n')
+    info = [    color("The task completion trigger activates the task completion protocol. Once used,", Colors.CYAN),
+                color("the user_messages hook will load the task completion protocol which guides", Colors.CYAN),
+                color("Claude through running pre-completion checks, committing changes, merging to", Colors.CYAN),
+                color("main, and archiving the completed task.", Colors.CYAN),"",
+                f"Current phrase: \"finito\"", 'Add task completion trigger phrases. Press Enter on empty line to finish.',""]
+    set_info(info)
+    phrases = []
     while True:
-        phrase = input(color('> ', Colors.CYAN)).strip()
+        phrase = input().strip()
         if not phrase: break
+        phrases.append(phrase)
         with ss.edit_config() as conf: conf.trigger_phrases.task_completion.append(phrase)
-        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
-    print()
-    sleep(0.3)
+        added = [color(f"✓ Added {', '.join([p for p in phrases[-5:]])}{f'... ({len(phrases)} total)' if (len(phrases) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
+    clear_info()
 
 def _edit_triggers_compaction():
-    print(color("The context compaction trigger activates the context compaction protocol. Once",Colors.CYAN))
-    print(color("used, the user_messages hook will load the context compaction protocol which",Colors.CYAN))
-    print(color("guides Claude through running logging and context-refinement agents to preserve",Colors.CYAN))
-    print(color("task state before the context window fills up.\n",Colors.CYAN))
-    print(f"Current phrase: \"squish\"\n")
-    print(color('Add context compaction trigger phrases. Press Enter on empty line to finish.\n', Colors.CYAN))
+    info = [    color("The context compaction trigger activates the context compaction protocol. Once", Colors.CYAN),
+                color("used, the user_messages hook will load the context compaction protocol which", Colors.CYAN),
+                color("guides Claude through running logging and context-refinement agents to preserve", Colors.CYAN),
+                color("task state before the context window fills up.", Colors.CYAN),"",
+                f"Current phrase: \"squish\"", 'Add context compaction trigger phrases. Press Enter on empty line to finish.',""]
+    set_info(info)
+    phrases = []
     while True:
-        phrase = input(color('> ', Colors.CYAN)).strip()
+        phrase = input().strip()
         if not phrase: break
+        phrases.append(phrase)
         with ss.edit_config() as conf: conf.trigger_phrases.context_compaction.append(phrase)
-        print(color(f"✓ Added '{phrase}'", Colors.GREEN))
-    print()
-    sleep(0.3)
+        added = [color(f"✓ Added {', '.join([p for p in phrases[-5:]])}{f'... ({len(phrases)} total)' if (len(phrases) > 5) else ''}", Colors.GREEN), ""]
+        updated_info = info + added
+        set_info(updated_info)
+    clear_info()
 #!<
 
 #!> Feature toggles
 def _ask_branch_enforcement():
-    print(color("When working on a task, branch enforcement blocks edits to files unless they",Colors.CYAN))
-    print(color("are in a repo that is on the task branch. If in a submodule, the submodule",Colors.CYAN))
-    print(color("also has to be listed in the task file under the \"submodules\" field.\n",Colors.CYAN))
-    print("This prevents Claude from doing silly things with files outside the scope of")
-    print("what you're working on, which can happen frighteningly often. But, it may not")
-    print("be as flexible as you want. *It also doesn't work well with non-Git VCS*.\n")
+    set_info([  color("When working on a task, branch enforcement blocks edits to files unless they", Colors.CYAN),
+                color("are in a repo that is on the task branch. If in a submodule, the submodule", Colors.CYAN),
+                color("also has to be listed in the task file under the \"submodules\" field.", Colors.CYAN), "",
+                "This prevents Claude from doing silly things with files outside the scope of",
+                "what you're working on, which can happen frighteningly often. But, it may not",
+                "be as flexible as you want. *It also doesn't work well with non-Git VCS*.", ""])
 
-    val = inquirer.list_input(message='I want branch enforcement', choices=['Enabled (recommended for git workflows)', 'Disabled (for alternative VCS like Jujutsu)'])
+    val = inquirer.list_input(message='I want branch enforcement:', choices=['Enabled (recommended for git workflows)', 'Disabled (for alternative VCS like Jujutsu)'])
     with ss.edit_config() as conf: conf.features.branch_enforcement = ('Enabled' in val)
-    print()
-    sleep(0.3)
+    clear_info()
 
 def _ask_auto_ultrathink():
-    print(color("\nAuto-ultrathink adds \"[[ ultrathink ]]\" to *every message* you submit to",Colors.CYAN))
-    print(color("Claude Code. This is the most robust way to force maximum thinking for every",Colors.CYAN))
-    print(color("message.\n",Colors.CYAN))
-    print("If you are not a Claude Max x20 subscriber and/or you are budget-conscious,")
-    print("it's recommended that you disable auto-ultrathink and manually trigger thinking")
-    print("as needed.\n")
-    val = inquirer.list_input(message='Auto-ultrathink', choices=['Enabled', 'Disabled (recommended for budget-conscious users)'])
+    set_info([  color("Auto-ultrathink adds \"[[ ultrathink ]]\" to *every message* you submit to", Colors.CYAN),
+                color("Claude Code. This is the most robust way to force maximum thinking for every", Colors.CYAN),
+                color("message.", Colors.CYAN), "",
+                "If you are not a Claude Max x20 subscriber and/or you are budget-conscious,",
+                "it's recommended that you disable auto-ultrathink and manually trigger thinking",
+                "as needed.", ""])
+    val = inquirer.list_input(message='I want auto-ultrathink:', choices=['Enabled', 'Disabled (recommended for budget-conscious users)'])
     with ss.edit_config() as conf: conf.features.auto_ultrathink = (val == 'Enabled')
-    print()
-    sleep(0.3)
+    clear_info()
 
 def _ask_nerd_fonts():
-    val = inquirer.list_input(message='I want Nerd Fonts icons in statusline', choices=['Enabled (Nerd Fonts installed)', 'Disabled (ASCII fallback)'])
+    val = inquirer.list_input(message='I want Nerd Fonts icons in statusline:', choices=['Enabled (Nerd Fonts installed)', 'Disabled (ASCII fallback)'])
     with ss.edit_config() as conf: conf.features.use_nerd_fonts = (val == 'Enabled')
-    print()
-    sleep(0.3)
 
 def _ask_context_warnings():
-    val = inquirer.list_input(message='I want Claude to be warned to suggest compacting context at', choices=['85% and 90%', '90%', 'Never'])
+    val = inquirer.list_input(message='I want Claude to be warned to suggest compacting context at:', choices=['85% and 90%', '90%', 'Never'])
     with ss.edit_config() as conf:
         if 'and' in val:
             conf.features.context_warnings.warn_85 = True
@@ -1313,7 +1800,9 @@ def _ask_context_warnings():
             conf.features.context_warnings.warn_90 = False
 
 def _ask_statusline():
-    val = inquirer.list_input(message="cc-sessions includes a statusline that shows context usage, current task, mode, and git branch. Would you like to use it?", choices=['Yes, use cc-sessions statusline', 'No, I have my own statusline'])
+    set_info([  color('cc-sessions includes a statusline that shows context usage, mode',Colors.CYAN),
+                color('current task, git branch, open tasks, and uncommitted files.',Colors.CYAN), ""])
+    val = inquirer.list_input(message="Would you like to use it?", choices=['Yes, use cc-sessions statusline', 'No, I have my own statusline'])
     if 'Yes' in val:
         settings_file = ss.PROJECT_ROOT / '.claude' / 'settings.json'
         if settings_file.exists(): 
@@ -1321,12 +1810,14 @@ def _ask_statusline():
         else: settings = {}
         settings['statusLine'] = {'type': 'command', 'command': 'python $CLAUDE_PROJECT_DIR/sessions/statusline.py'}
         with open(settings_file, 'w') as f: json.dump(settings, f, indent=2)
-        print(color('✓ Statusline configured in .claude/settings.json', Colors.GREEN))
+        set_info([color('✓ Statusline configured in .claude/settings.json', Colors.GREEN)])
+        sleep(0.5)
     else: 
-        print(color('\nYou can add the cc-sessions statusline later by adding this to .claude/settings.json:', Colors.YELLOW))
-        print(color('{\n  "statusLine": {\n    "type": "command",\n    "command": "python $CLAUDE_PROJECT_DIR/sessions/statusline.py"\n  }\n}', Colors.YELLOW))
-    print()
-    sleep(0.3)
+        set_info([  color('You can add the cc-sessions statusline later by adding this to .claude/settings.json:', Colors.YELLOW),
+                    color('{',Colors.YELLOW), color('  "statusLine": {',Colors.YELLOW), color('    "type": "command",',Colors.YELLOW),
+                    color('    "command": "python $CLAUDE_PROJECT_DIR/sessions/statusline.py"',Colors.YELLOW), color('  }',Colors.YELLOW),
+                    color('}', Colors.YELLOW),""])
+        input('Press enter to continue...')
     return True if 'Yes' in val else False
 #!<
 
@@ -1335,11 +1826,11 @@ def _ask_statusline():
 ## ===== CONFIG PHASES ===== ##
 
 def run_full_configuration():
-    print_config_header()
+    show_header(print_config_header)
     cfg = {'git_preferences': {}, 'environment': {}, 'blocked_actions': {}, 'trigger_phrases': {}, 'features': {}}
 
     #!> Gather git preferences
-    print_git_section()
+    show_header(print_git_section)
     _ask_default_branch()
     _ask_has_submodules()
     _ask_git_add_pattern()
@@ -1349,56 +1840,56 @@ def run_full_configuration():
     #!<
 
     #!> Gather environment settings
-    print_env_section()
+    show_header(print_env_section)
     _ask_developer_name()
     _ask_os()
     _ask_shell()
     #!<
 
     #!> Gather blocked actions
-    print_read_only_section()
+    show_header(print_read_only_section)
     _edit_bash_read_patterns()
 
-    print_write_like_section()
+    show_header(print_write_like_section)
     _edit_bash_write_patterns()
 
-    print_extrasafe_section()
+    show_header(print_extrasafe_section)
     _ask_extrasafe_mode()
 
-    print_blocking_header()
+    show_header(print_blocking_header)
     _edit_blocked_tools()
     #!<
 
     #!> Gather trigger phrases
-    print_triggers_header()
+    show_header(print_triggers_header)
     wants_customization = _customize_triggers()
     if wants_customization:
-        print_go_triggers_section()
+        show_header(print_go_triggers_section)
         _edit_triggers_implementation()
 
-        print_no_triggers_section()
+        show_header(print_no_triggers_section)
         _edit_triggers_discussion()
 
-        print_create_section()
+        show_header(print_create_section)
         _edit_triggers_task_creation()
 
-        print_startup_section()
+        show_header(print_startup_section)
         _edit_triggers_task_startup()
 
-        print_complete_section()
+        show_header(print_complete_section)
         _edit_triggers_task_completion()
 
-        print_compact_section()
+        show_header(print_compact_section)
         _edit_triggers_compaction()
     #!<
 
     #!> Ask about statusline
-    print_statusline_header()
+    show_header(print_statusline_header)
     statusline_installed = _ask_statusline()
     #!<
 
     #!> Gather feature toggles
-    print_features_header()
+    show_header(print_features_header)
 
     _ask_branch_enforcement()
     _ask_auto_ultrathink()
@@ -1411,12 +1902,11 @@ def run_full_configuration():
 
 def run_config_editor(project_root):
     """Interactive config editor"""
-    print_config_header()
-    print(color('How to use:', Colors.BOLD))
-    print('- Use j/k or arrows to navigate, Enter to select')
-    print('- Choose Back to return, Done to finish')
-    print('- You can also press Ctrl+C to exit anytime')
-    print()
+    show_header(print_config_header)
+    set_info([  color('How to use:', Colors.CYAN),
+                color('- Use j/k or arrows to navigate, Enter to select',Colors.CYAN),
+                color('- Choose Back to return, Done to finish',Colors.CYAN),
+                color('- You can also press Ctrl+C to exit anytime',Colors.CYAN), ""])
 
     settings_path = project_root / '.claude' / 'settings.json'
 
@@ -1446,162 +1936,178 @@ def run_config_editor(project_root):
         return cfg, _statusline_installed()
 
     def _git_menu():
+        show_header(print_git_section)
         cfg, _ = _reload()
         g = cfg.git_preferences
-        actions = [
-            (f"Default branch | {_fmt_enum(g.default_branch)}", _ask_default_branch),
-            (f"Has submodules | {_fmt_enum(g.has_submodules)}", _ask_has_submodules),
-            (f"Staging pattern | {_fmt_enum(g.add_pattern)}", _ask_git_add_pattern),
-            (f"Commit style | {_fmt_enum(g.commit_style)}", _ask_commit_style),
-            (f"Auto-merge | {_fmt_enum(g.auto_merge)}", _ask_auto_merge),
-            (f"Auto-push | {_fmt_enum(g.auto_push)}", _ask_auto_push),
-            (color("Back",Colors.YELLOW), None),
-        ]
+        actions = [ (f"{color('Default branch',Colors.RESET)} | {color(_fmt_enum(g.default_branch),Colors.YELLOW)}", _ask_default_branch),
+                    (f"{color('Has submodules',Colors.RESET)} | {color(_fmt_enum(g.has_submodules),Colors.YELLOW)}", _ask_has_submodules),
+                    (f"{color('Staging pattern',Colors.RESET)} | {color(_fmt_enum(g.add_pattern),Colors.YELLOW)}", _ask_git_add_pattern),
+                    (f"{color('Commit style',Colors.RESET)} | {color(_fmt_enum(g.commit_style),Colors.YELLOW)}", _ask_commit_style),
+                    (f"{color('Auto-merge',Colors.RESET)} | {color(_fmt_enum(g.auto_merge),Colors.YELLOW)}", _ask_auto_merge),
+                    (f"{color('Auto-push',Colors.RESET)} | {color(_fmt_enum(g.auto_push),Colors.YELLOW)}", _ask_auto_push),
+                    (color("Back",Colors.YELLOW), None),]
         labels = [lbl for (lbl, _) in actions]
         while True:
-            choice = inquirer.list_input(message='Git Settings', choices=labels)
+            choice = inquirer.list_input(message=f"{color('[Setting]',Colors.RESET)} | {color('[Current Value]',Colors.YELLOW)}\n", choices=labels)
             if 'Back' in choice: break
             fn = dict(actions).get(choice)
             if fn: fn()
             cfg, _ = _reload()
             g = cfg.git_preferences
-            actions[0] = (f"Default branch | {_fmt_enum(g.default_branch)}", _ask_default_branch)
-            actions[1] = (f"Has submodules | {_fmt_enum(g.has_submodules)}", _ask_has_submodules)
-            actions[2] = (f"Staging pattern | {_fmt_enum(g.add_pattern)}", _ask_git_add_pattern)
-            actions[3] = (f"Commit style | {_fmt_enum(g.commit_style)}", _ask_commit_style)
-            actions[4] = (f"Auto-merge | {_fmt_enum(g.auto_merge)}", _ask_auto_merge)
-            actions[5] = (f"Auto-push | {_fmt_enum(g.auto_push)}", _ask_auto_push)
+            actions[0] = (f"{color('Default branch',Colors.RESET)} | {color(_fmt_enum(g.default_branch),Colors.YELLOW)}", _ask_default_branch)
+            actions[1] = (f"{color('Has submodules',Colors.RESET)} | {color(_fmt_enum(g.has_submodules),Colors.YELLOW)}", _ask_has_submodules)
+            actions[2] = (f"{color('Staging pattern',Colors.RESET)} | {color(_fmt_enum(g.add_pattern),Colors.YELLOW)}", _ask_git_add_pattern)
+            actions[3] = (f"{color('Commit style',Colors.RESET)} | {color(_fmt_enum(g.commit_style),Colors.YELLOW)}", _ask_commit_style)
+            actions[4] = (f"{color('Auto-merge',Colors.RESET)} | {color(_fmt_enum(g.auto_merge),Colors.YELLOW)}", _ask_auto_merge)
+            actions[5] = (f"{color('Auto-push',Colors.RESET)} | {color(_fmt_enum(g.auto_push),Colors.YELLOW)}", _ask_auto_push)
             labels[:] = [lbl for (lbl, _) in actions]
 
     def _env_menu():
+        show_header(print_env_section)
         cfg, _ = _reload()
         e = cfg.environment
-        actions = [
-            (f"Developer name | {_fmt_enum(e.developer_name)}", _ask_developer_name),
-            (f"Operating system | {_fmt_enum(e.os)}", _ask_os),
-            (f"Shell | {_fmt_enum(e.shell)}", _ask_shell),
-            (color("Back",Colors.YELLOW), None),
-        ]
+        actions = [ (f"Developer name | {color(_fmt_enum(e.developer_name),Colors.YELLOW)}", _ask_developer_name),
+                    (f"Operating system | {color(_fmt_enum(e.os),Colors.YELLOW)}", _ask_os),
+                    (f"Shell | {color(_fmt_enum(e.shell),Colors.YELLOW)}", _ask_shell),
+                    (color("Back",Colors.YELLOW), None),]
         labels = [lbl for (lbl, _) in actions]
         while True:
-            choice = inquirer.list_input(message='Environment', choices=labels)
+            choice = inquirer.list_input(message=f"{color('[Setting]',Colors.RESET)} | {color('[Current Value]',Colors.YELLOW)}\n", choices=labels)
             if 'Back' in choice: break
             fn = dict(actions).get(choice)
             if fn: fn()
             cfg, _ = _reload(); e = cfg.environment
-            actions[0] = (f"Developer name | {_fmt_enum(e.developer_name)}", _ask_developer_name)
-            actions[1] = (f"Operating system | {_fmt_enum(e.os)}", _ask_os)
-            actions[2] = (f"Shell | {_fmt_enum(e.shell)}", _ask_shell)
+            actions[0] = (f"Developer name | {color(_fmt_enum(e.developer_name),Colors.YELLOW)}", _ask_developer_name)
+            actions[1] = (f"Operating system | {color(_fmt_enum(e.os),Colors.YELLOW)}", _ask_os)
+            actions[2] = (f"Shell | {color(_fmt_enum(e.shell),Colors.YELLOW)}", _ask_shell)
             labels[:] = [lbl for (lbl, _) in actions]
 
     def _blocked_menu():
+        show_header(print_blocking_header)
         cfg, _ = _reload()
         b = cfg.blocked_actions
-        actions = [
-            (f"Tools list | {_fmt_tools(b.implementation_only_tools)}", _edit_blocked_tools),
-            (f"Bash read-only | {_fmt_list(b.bash_read_patterns)}", _edit_bash_read_patterns),
-            (f"Bash write-like | {_fmt_list(b.bash_write_patterns)}", _edit_bash_write_patterns),
-            (f"Extrasafe mode | {_fmt_bool(b.extrasafe)}", _ask_extrasafe_mode),
-            (color("Back",Colors.YELLOW), None),
-        ]
+        actions = [ (f"Tools list | {color(_fmt_tools(b.implementation_only_tools),Colors.YELLOW)}", _edit_blocked_tools),
+                    (f"Bash read-only | {color(_fmt_list(b.bash_read_patterns),Colors.YELLOW)}", _edit_bash_read_patterns),
+                    (f"Bash write-like | {color(_fmt_list(b.bash_write_patterns),Colors.YELLOW)}", _edit_bash_write_patterns),
+                    (f"Extrasafe mode | {color(_fmt_bool(b.extrasafe),Colors.YELLOW)}", _ask_extrasafe_mode),
+                    (color("Back",Colors.YELLOW), None),]
         labels = [lbl for (lbl, _) in actions]
         while True:
-            choice = inquirer.list_input(message='Blocked Actions', choices=labels)
+            choice = inquirer.list_input(message=f"{color('[Setting]',Colors.RESET)} | {color('[Current Value]',Colors.YELLOW)}\n", choices=labels)
             if 'Back' in choice: break
             fn = dict(actions).get(choice)
-            if fn: fn()
+            if fn:
+                if 'Bash read-only' in choice: show_header(print_read_only_section)
+                elif 'Bash write-like' in choice: show_header(print_write_like_section)
+                elif 'Extrasafe' in choice: show_header(print_extrasafe_section)
+                fn()
+                show_header(print_blocking_header)
             cfg, _ = _reload(); b = cfg.blocked_actions
-            actions[0] = (f"Tools list | {_fmt_tools(b.implementation_only_tools)}", _edit_blocked_tools)
-            actions[1] = (f"Bash read-only | {_fmt_list(b.bash_read_patterns)}", _edit_bash_read_patterns)
-            actions[2] = (f"Bash write-like | {_fmt_list(b.bash_write_patterns)}", _edit_bash_write_patterns)
-            actions[3] = (f"Extrasafe mode | {_fmt_bool(b.extrasafe)}", _ask_extrasafe_mode)
+            actions[0] = (f"Tools list | {color(_fmt_tools(b.implementation_only_tools),Colors.YELLOW)}", _edit_blocked_tools)
+            actions[1] = (f"Bash read-only | {color(_fmt_list(b.bash_read_patterns),Colors.YELLOW)}", _edit_bash_read_patterns)
+            actions[2] = (f"Bash write-like | {color(_fmt_list(b.bash_write_patterns),Colors.YELLOW)}", _edit_bash_write_patterns)
+            actions[3] = (f"Extrasafe mode | {color(_fmt_bool(b.extrasafe),Colors.YELLOW)}", _ask_extrasafe_mode)
             labels[:] = [lbl for (lbl, _) in actions]
 
     def _triggers_menu():
+        show_header(print_triggers_header)
         cfg, _ = _reload(); t = cfg.trigger_phrases
-        actions = [
-            (f"Implementation mode | {_fmt_list(t.implementation_mode)}", _edit_triggers_implementation),
-            (f"Discussion mode | {_fmt_list(t.discussion_mode)}", _edit_triggers_discussion),
-            (f"Task creation | {_fmt_list(t.task_creation)}", _edit_triggers_task_creation),
-            (f"Task startup | {_fmt_list(t.task_startup)}", _edit_triggers_task_startup),
-            (f"Task completion | {_fmt_list(t.task_completion)}", _edit_triggers_task_completion),
-            (f"Context compaction | {_fmt_list(t.context_compaction)}", _edit_triggers_compaction),
-            (color("Back",Colors.YELLOW), None),
-        ]
+        actions = [ (f"Implementation mode | {color(_fmt_list(t.implementation_mode),Colors.YELLOW)}", _edit_triggers_implementation),
+                    (f"Discussion mode | {color(_fmt_list(t.discussion_mode),Colors.YELLOW)}", _edit_triggers_discussion),
+                    (f"Task creation | {color(_fmt_list(t.task_creation),Colors.YELLOW)}", _edit_triggers_task_creation),
+                    (f"Task startup | {color(_fmt_list(t.task_startup),Colors.YELLOW)}", _edit_triggers_task_startup),
+                    (f"Task completion | {color(_fmt_list(t.task_completion),Colors.YELLOW)}", _edit_triggers_task_completion),
+                    (f"Context compaction | {color(_fmt_list(t.context_compaction),Colors.YELLOW)}", _edit_triggers_compaction),
+                    (color("Back",Colors.YELLOW), None),]
         labels = [lbl for (lbl, _) in actions]
         while True:
-            choice = inquirer.list_input(message='Trigger Phrases', choices=labels)
+            choice = inquirer.list_input(message=f"{color('[Setting]',Colors.RESET)} | {color('[Current Value]',Colors.YELLOW)}\n", choices=labels)
             if 'Back' in choice: break
             fn = dict(actions).get(choice)
-            if fn: fn()
+            if fn:
+                if 'Implementation mode' in choice: show_header(print_go_triggers_section)
+                elif 'Discussion mode' in choice: show_header(print_no_triggers_section)
+                elif 'Task creation' in choice: show_header(print_create_section)
+                elif 'Task startup' in choice: show_header(print_startup_section)
+                elif 'Task completion' in choice: show_header(print_complete_section)
+                elif 'Context compaction' in choice: show_header(print_compact_section)
+                fn()
+                show_header(print_triggers_header)
             cfg, _ = _reload(); t = cfg.trigger_phrases
             actions[0] = (f"Implementation mode | {_fmt_list(t.implementation_mode)}", _edit_triggers_implementation)
-            actions[1] = (f"Discussion mode | {_fmt_list(t.discussion_mode)}", _edit_triggers_discussion)
-            actions[2] = (f"Task creation | {_fmt_list(t.task_creation)}", _edit_triggers_task_creation)
-            actions[3] = (f"Task startup | {_fmt_list(t.task_startup)}", _edit_triggers_task_startup)
-            actions[4] = (f"Task completion | {_fmt_list(t.task_completion)}", _edit_triggers_task_completion)
-            actions[5] = (f"Context compaction | {_fmt_list(t.context_compaction)}", _edit_triggers_compaction)
+            actions[1] = (f"Discussion mode | {color(_fmt_list(t.discussion_mode),Colors.YELLOW)}", _edit_triggers_discussion)
+            actions[2] = (f"Task creation | {color(_fmt_list(t.task_creation),Colors.YELLOW)}", _edit_triggers_task_creation)
+            actions[3] = (f"Task startup | {color(_fmt_list(t.task_startup),Colors.YELLOW)}", _edit_triggers_task_startup)
+            actions[4] = (f"Task completion | {color(_fmt_list(t.task_completion),Colors.YELLOW)}", _edit_triggers_task_completion)
+            actions[5] = (f"Context compaction | {color(_fmt_list(t.context_compaction),Colors.YELLOW)}", _edit_triggers_compaction)
             labels[:] = [lbl for (lbl, _) in actions]
 
     def _features_menu():
+        show_header(print_features_header)
         cfg, installed = _reload(); f = cfg.features
         cw = []
         if getattr(f.context_warnings, 'warn_85', False): cw.append('85%')
         if getattr(f.context_warnings, 'warn_90', False): cw.append('90%')
         cw_str = ', '.join(cw) if cw else 'Never'
 
-        actions = [
-            (f"Statusline integration | {'Installed' if installed else 'Not installed'}", _ask_statusline),
-            (f"Branch enforcement | {_fmt_bool(f.branch_enforcement)}", _ask_branch_enforcement),
-            (f"Auto-ultrathink | {_fmt_bool(f.auto_ultrathink)}", _ask_auto_ultrathink),
-            (f"Nerd Fonts | {_fmt_bool(f.use_nerd_fonts)}", _ask_nerd_fonts) if installed else None,
-            (f"Context warnings | {cw_str}", _ask_context_warnings),
-            (color("Back",Colors.YELLOW), None),
-        ]
+        actions = [ (f"Statusline integration | {color('Installed' if installed else 'Not installed',Colors.YELLOW)}", _ask_statusline),
+                    (f"Branch enforcement | {color(_fmt_bool(f.branch_enforcement),Colors.YELLOW)}", _ask_branch_enforcement),
+                    (f"Auto-ultrathink | {color(_fmt_bool(f.auto_ultrathink),Colors.YELLOW)}", _ask_auto_ultrathink),
+                    (f"Nerd Fonts | {color(_fmt_bool(f.use_nerd_fonts),Colors.YELLOW)}", _ask_nerd_fonts) if installed else None,
+                    (f"Context warnings | {color(cw_str,Colors.YELLOW)}", _ask_context_warnings),
+                    (color("Back",Colors.YELLOW), None),]
         actions = [a for a in actions if a]
         labels = [lbl for (lbl, _) in actions]
         while True:
-            choice = inquirer.list_input(message='Features', choices=labels)
+            choice = inquirer.list_input(message=f"{color('[Setting]',Colors.RESET)} | {color('[Current Value]',Colors.YELLOW)}\n", choices=labels)
             if 'Back' in choice: break
             fn = dict(actions).get(choice)
-            if fn: fn()
+            if fn:
+                if 'Statusline integration' in choice: show_header(print_statusline_header)
+                fn()
+                show_header(print_features_header)
             cfg, installed = _reload(); f = cfg.features
             cw = []
             if getattr(f.context_warnings, 'warn_85', False): cw.append('85%')
             if getattr(f.context_warnings, 'warn_90', False): cw.append('90%')
             cw_str = ', '.join(cw) if cw else 'Never'
-            actions = [
-                (f"Statusline integration | {'Installed' if installed else 'Not installed'}", _ask_statusline),
-                (f"Branch enforcement | {_fmt_bool(f.branch_enforcement)}", _ask_branch_enforcement),
-                (f"Auto-ultrathink | {_fmt_bool(f.auto_ultrathink)}", _ask_auto_ultrathink),
-                (f"Nerd Fonts | {_fmt_bool(f.use_nerd_fonts)}", _ask_nerd_fonts) if installed else None,
-                (f"Context warnings | {cw_str}", _ask_context_warnings),
-                (color("Back",Colors.YELLOW), None),
-            ]
+            actions = [ (f"Statusline integration | {color('Installed' if installed else 'Not installed',Colors.YELLOW)}", _ask_statusline),
+                        (f"Branch enforcement | {color(_fmt_bool(f.branch_enforcement),Colors.YELLOW)}", _ask_branch_enforcement),
+                        (f"Auto-ultrathink | {color(_fmt_bool(f.auto_ultrathink),Colors.YELLOW)}", _ask_auto_ultrathink),
+                        (f"Nerd Fonts | {color(_fmt_bool(f.use_nerd_fonts),Colors.YELLOW)}", _ask_nerd_fonts) if installed else None,
+                        (f"Context warnings | {color(cw_str,Colors.YELLOW)}", _ask_context_warnings),
+                        (color("Back",Colors.YELLOW), None),]
             actions = [a for a in actions if a]
             labels[:] = [lbl for (lbl, _) in actions]
-
-    # (statusline menu removed; statusline now part of Features)
 
     # Main menu: grouped categories to avoid long scrolling
     while True:
         try:
+            show_header(print_config_header)
             choice = inquirer.list_input(
                 message='Config Editor — choose a category',
-                choices=['Git', 'Environment', 'Blocked Actions', 'Trigger Phrases', 'Features', color('Done',Colors.RED)])
+                choices=[   f"{color('Git Preferences', Colors.CYAN)} {color('(default branch, submodules, staging pattern, commit style, auto-merge, auto-push)', Colors.GRAY)}",
+                            f"{color('Environment', Colors.CYAN)} {color('(developer name, operating system, shell)', Colors.GRAY)}",
+                            f"{color('Blocked Actions', Colors.CYAN)} {color('(tools, read-only commands, write-like commands, extrasafe)', Colors.GRAY)}",
+                            f"{color('Trigger Phrases', Colors.CYAN)} {color('(implementation, discussion, task create/start/complete, compaction)', Colors.GRAY)}",
+                            f"{color('Features', Colors.CYAN)} {color('(statusline, branch enforcement, ultrathink, context warnings, Nerd Fonts)', Colors.GRAY)}",
+                            color('Done',Colors.RED)])
         except KeyboardInterrupt: break
 
-        if 'Done' in choice: break
-        elif choice == 'Git': _git_menu()
-        elif choice == 'Environment': _env_menu()
-        elif choice == 'Blocked Actions': _blocked_menu()
-        elif choice == 'Trigger Phrases': _triggers_menu()
-        elif choice == 'Features': _features_menu()
+        norm = _strip_ansi(choice)
+        if 'Done' in choice:
+            clear_info()
+            break
+        elif norm.startswith('Git Preferences'): _git_menu()
+        elif norm.startswith('Environment'): _env_menu()
+        elif norm.startswith('Blocked Actions'): _blocked_menu()
+        elif norm.startswith('Trigger Phrases'): _triggers_menu()
+        elif norm.startswith('Features'): _features_menu()
         else: continue # Shouldn't happen, but continue gracefully
 ##-##
 
 ## ===== IMPORT CONFIG ===== ##
-def import_config(project_root: Path, source: str, source_type: str) -> bool:
+def import_config(project_root: Path, source: str, source_type: str, info: list) -> bool:
     """Import configuration and selected agents from a local dir, Git URL, or GitHub stub.
     Returns True on success (config or any agent imported).
     """
@@ -1615,7 +2121,7 @@ def import_config(project_root: Path, source: str, source_type: str) -> bool:
             tmp_to_remove = Path(tempfile.mkdtemp(prefix='ccs-import-'))
             try: subprocess.run(['git', 'clone', '--depth', '1', url, str(tmp_to_remove)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             except Exception as e:
-                print(color(f'Git clone failed for {url}: {e}', Colors.RED))
+                set_info(info + [color(f'Git clone failed for {url}: {e}', Colors.RED), ""])
                 return False
             src_path = tmp_to_remove
         elif source_type == 'Git repository URL':
@@ -1623,14 +2129,14 @@ def import_config(project_root: Path, source: str, source_type: str) -> bool:
             tmp_to_remove = Path(tempfile.mkdtemp(prefix='ccs-import-'))
             try: subprocess.run(['git', 'clone', '--depth', '1', url, str(tmp_to_remove)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             except Exception as e:
-                print(color(f'Git clone failed for {url}: {e}', Colors.RED))
+                set_info(info + [color(f'Git clone failed for {url}: {e}', Colors.RED), ""])
                 return False
             src_path = tmp_to_remove
         else:
             # Local directory
             src_path = Path(source).expanduser().resolve()
             if not src_path.exists() or not src_path.is_dir():
-                print(color('Provided path does not exist or is not a directory.', Colors.RED))
+                set_info(info + [color('Provided path does not exist or is not a directory.', Colors.RED), ""])
                 return False
 
         # sessions-config.json from repo_root/sessions/
@@ -1639,9 +2145,9 @@ def import_config(project_root: Path, source: str, source_type: str) -> bool:
         if src_cfg.exists():
             dst_cfg.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_cfg, dst_cfg)
-            print(color('✓ Imported sessions-config.json', Colors.GREEN))
+            set_info(info + [color('✓ Imported sessions-config.json', Colors.GREEN), ""])
             imported_any = True
-        else: print(color('No sessions-config.json found to import at sessions/sessions-config.json', Colors.YELLOW))
+        else: set_info(info + [color('No sessions-config.json found to import at sessions/sessions-config.json', Colors.YELLOW), ""])
 
         # Agents: present baseline agent files for choice
         src_agents = src_path / '.claude' / 'agents'
@@ -1658,15 +2164,15 @@ def import_config(project_root: Path, source: str, source_type: str) -> bool:
                     if choice == 'Use imported version':
                         dst_file.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(src_file, dst_file)
-                        print(color(f"✓ Imported agent: {agent_name}", Colors.GREEN))
+                        set_info(info + [color(f"✓ Imported agent: {agent_name}", Colors.GREEN), ""])
                         imported_any = True
-        else: print(color('No .claude/agents directory found to import agents from', Colors.YELLOW))
+        else: set_info(info + [color('No .claude/agents directory found to import agents from', Colors.YELLOW), ""])
 
         # Reload config/state
         setup_shared_state_and_initialize(project_root)
         return imported_any
     except Exception as e:
-        print(color(f'Import failed: {e}', Colors.RED))
+        set_info(info + [color(f'Import failed: {e}', Colors.RED), ""])
         return False
     finally:
         if tmp_to_remove is not None:
@@ -1676,16 +2182,15 @@ def kickstart_decision(project_root: Path) -> str:
     """Prompt user for kickstart onboarding preference and set state/cleanup accordingly.
     Returns one of: 'full', 'subagents', 'skip'.
     """
-    print_kickstart_header()
-
-    print("cc-sessions is an opinionated interactive workflow. You can learn how to use")
-    print("it with Claude Code via a custom \"session\" called kickstart.\n")
-    print("Kickstart will:")
-    print("  • Teach you the features of cc-sessions")
-    print("  • Help you set up your first task")
-    print("  • Show the 4 core protocols you can run")
-    print("  • Help customize subagents for your codebase\n")
-    print("Time: 15–30 minutes\n")
+    show_header(print_kickstart_header)
+    set_info([  color("cc-sessions is an opinionated interactive workflow. You can learn how to use",Colors.CYAN),
+                color("it with Claude Code via a custom \"session\" called kickstart.",Colors.CYAN), "",
+                "Kickstart will:",
+                "  • Teach you the features of cc-sessions",
+                "  • Help you set up your first task",
+                "  • Show the 4 core protocols you can run",
+                "  • Help customize subagents for your codebase", "",
+                "Time: 15–30 minutes", ""])
 
     choice = inquirer.list_input(
         message="Would you like to run kickstart on your first session?",
@@ -1696,6 +2201,7 @@ def kickstart_decision(project_root: Path) -> str:
         ]
     )
 
+    clear_info()
     if 'Yes' in choice:
         with ss.edit_state() as s: s.metadata['kickstart'] = {'mode': 'full'}
         print(color('\n✓ Kickstart will auto-start on your first session', Colors.GREEN))
@@ -1748,15 +2254,17 @@ def main():
         # Phase: load shared state and initialize defaults
         setup_shared_state_and_initialize(PROJECT_ROOT)
 
-        # Phase: decision point (import vs full config)
-        did_import = installer_decision_flow(PROJECT_ROOT)
+        # Phase: interactive portions under TUI
+        with tui_session():
+            # Decision point (import vs full config)
+            did_import = installer_decision_flow(PROJECT_ROOT)
 
-        # Phase: configuration
-        if did_import: run_config_editor(PROJECT_ROOT) # Present config editor so user can tweak imported settings
-        else: run_full_configuration()
+            # Configuration
+            if did_import: run_config_editor(PROJECT_ROOT) # tweak imported settings
+            else: run_full_configuration()
 
-        # Phase: kickstart decision
-        kickstart_mode = kickstart_decision(PROJECT_ROOT)
+            # Kickstart decision
+            kickstart_mode = kickstart_decision(PROJECT_ROOT)
         
         # Restore tasks if this was an update
         if backup_dir:
@@ -1767,12 +2275,11 @@ def main():
         # Output final message
         print(color('\n✅ cc-sessions installed successfully!\n', Colors.GREEN))
         print(color('Next steps:', Colors.BOLD))
-        print('  1. Restart your Claude Code session (or run /clear)')
+        print('  1. Restart your Claude Code session (or run /clear)'
 
         if kickstart_mode == 'full':
-            print('  2. The kickstart onboarding will guide you through setup\n')
-        elif kickstart_mode == 'subagents':
-            print('  2. Kickstart will guide you through subagent customization\n')
+              print('  2. The kickstart onboarding will guide you through setup\n')
+        elif kickstart_mode == 'subagents': print('  2. Kickstart will guide you through subagent customization\n')
         else:  # skip
             print('  2. You can start using cc-sessions right away!')
             print('     - Try "mek: my first task" to create a task')
@@ -1793,29 +2300,28 @@ def installer_decision_flow(project_root):
     Decision point: detect returning users and optionally import config/agents.
     Returns True if a config import occurred and succeeded.
     """
-    print_installer_header()
+    show_header(print_installer_header)
 
     did_import = False
     first_time = inquirer.list_input(message="Is this your first time using cc-sessions?", choices=['Yes', 'No'])
 
     if first_time == 'No':
-        version_check = inquirer.list_input(
-            message="Have you used cc-sessions v0.3.0 or later (released October 2025)?",
-            choices=['Yes', 'No']
-        )
+        version_check = inquirer.list_input(message="Have you used cc-sessions v0.3.0 or later (released October 2025)?", choices=['Yes', 'No'])
         if version_check == 'Yes':
-            import_choice = inquirer.list_input(
-                message="Would you like to import your configuration and agents?",
-                choices=['Yes', 'No']
-            )
+            import_choice = inquirer.list_input(message="Would you like to import your configuration and agents?", choices=['Yes', 'No'])
             if import_choice == 'Yes':
+                info = [    color('We can import your config and, optionally, agents from Github (URL or stub) or', Colors.CYAN),
+                            color('a project folder on your local machine.', Colors.CYAN), ""]
+                set_info(info)
                 import_source = inquirer.list_input(
                     message="Where is your cc-sessions configuration?",
-                    choices=['Local directory', 'Git repository URL', 'GitHub stub (owner/repo)', 'Skip import']
-                )
+                    choices=['Local directory', 'Git repository URL', 'GitHub stub (owner/repo)', 'Skip import'])
                 if import_source != 'Skip import':
-                    source_path = input(color("Path or URL: ", Colors.CYAN)).strip()
-                    did_import = import_config(project_root, source_path, import_source)
+                    if 'Local' in import_source: source_path = input("Path to project: ").strip()
+                    elif 'URL' in import_source: source_path = input("Github URL: ")
+                    elif 'stub' in import_source: source_path = input("Github stub (i.e. author/repo_name): ")
+                    set_info(info + [color(f"Steady lads - importing from {source_path}...", Colors.YELLOW)])
+                    did_import = import_config(project_root, source_path, import_source, info)
                     if not did_import:
                         print(color('\nImport failed or not implemented. Continuing with configuration...', Colors.YELLOW))
                 else:
