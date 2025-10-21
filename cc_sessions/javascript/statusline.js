@@ -370,6 +370,27 @@ function main() {
         }
     }
 
+    // Sessions disabled check - show simplified statusline and exit
+    if (!config.features.sessions_enabled) {
+        // Line 1 - Progress bar | Disabled message
+        const contextPart = progressBar || `${gray}No context usage data${reset}`;
+        const disabledMsg = `${gray}cc-sessions disabled${reset}`;
+        console.log(contextPart + ' | ' + disabledMsg);
+
+        // Line 2 - Git branch only (if available)
+        if (gitBranchInfo) {
+            const line2Parts = [gitBranchInfo];
+            if (upstreamInfo) {
+                line2Parts.push(upstreamInfo);
+            }
+            console.log(line2Parts.join(' | '));
+        } else {
+            console.log('');
+        }
+
+        process.exit(0);
+    }
+
     // Current task
     const currTask = state?.current_task?.name || null;
 

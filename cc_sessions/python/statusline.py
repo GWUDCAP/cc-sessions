@@ -367,6 +367,26 @@ if git_path:
         git_branch_info = None
 ##-##
 
+## ===== SESSIONS DISABLED CHECK ===== ##
+# If sessions are disabled, show simplified statusline and exit
+if not CONFIG.features.sessions_enabled:
+    # Line 1 - Progress bar | Disabled message
+    context_part = progress_bar_str if progress_bar_str else f"{gray}No context usage data{reset}"
+    disabled_msg = f"{gray}cc-sessions disabled{reset}"
+    print(f"{context_part} | {disabled_msg}")
+
+    # Line 2 - Git branch only (if available)
+    if git_branch_info:
+        line2_parts = [git_branch_info]
+        if upstream_info:
+            line2_parts.append(upstream_info)
+        print(" | ".join(line2_parts))
+    else:
+        print("")
+
+    sys.exit(0)
+##-##
+
 ## ===== CURRENT TASK ===== ##
 curr_task = STATE.current_task.name if STATE else None
 ##-##
