@@ -38,7 +38,7 @@ User preferences in `sessions/sessions-config.json`:
 - **Environment**: developer_name, os, shell
 - **Trigger Phrases**: Customizable for all mode transitions
 - **Git Preferences**: Branch naming, commit styles, auto-merge/push, submodules
-- **Feature Toggles**: branch_enforcement, task_detection, auto_ultrathink, icon_style, context warnings
+- **Feature Toggles**: sessions_enabled, branch_enforcement, task_detection, auto_ultrathink, icon_style, context warnings
 - **Blocking Patterns**: implementation_only_tools, bash_read_patterns, bash_write_patterns
 
 ### Templated Protocols
@@ -93,8 +93,6 @@ Configuration-driven protocol system that auto-adapts based on user preferences:
 - `cc_sessions/install.py` (Python) or `install.js` (JavaScript) - Language-specific installers
 - `cc_sessions/commands/` - Slash command wrappers
 - `cc_sessions/templates/` - Task templates
-- `scripts/prepare-release.py` - Pre-flight validation for releases
-- `scripts/publish-release.py` - Atomic dual-package publishing workflow
 
 ## Installation
 
@@ -114,10 +112,43 @@ uv pip install cc-sessions         # UV package manager
 npx cc-sessions
 ```
 
-### Development
+### Development Setup
+
+For local development, install cc-sessions in symlinked mode from the repository:
+
+**Python Development**:
 ```bash
-./install.sh                       # From repository root
+cd /path/to/cc-sessions
+python cc_sessions/install.py
 ```
+
+**JavaScript Development**:
+```bash
+cd /path/to/cc-sessions
+node cc_sessions/install.js
+```
+
+The installer detects `CLAUDE_PROJECT_DIR` environment variable and creates symlinked hooks that point back to your repository for live development.
+
+**Building Packages**:
+
+Python:
+```bash
+python -m build
+# Creates dist/cc_sessions-*.tar.gz and dist/cc_sessions-*.whl
+```
+
+JavaScript:
+```bash
+npm pack
+# Creates cc-sessions-*.tgz
+```
+
+**Testing Local Changes**:
+After modifying hook or API files:
+1. Changes are immediately reflected (symlinked development)
+2. Start a new Claude Code session to test hook behavior
+3. Use `/sessions` commands to test API changes
 
 Both installers:
 - Detect existing installations and create timestamped backups
@@ -167,6 +198,32 @@ sessions tasks start @<task-name>           # Start task with validation
 ### Slash Commands
 - `/sessions` - Unified interface with subsystem routing
 - All commands support `--from-slash` flag for contextual output
+
+### Disabling Sessions
+The entire sessions framework can be toggled on/off using the `sessions_enabled` feature flag:
+
+```bash
+sessions config features toggle sessions_enabled  # Toggle on/off
+sessions config features set sessions_enabled false  # Explicitly disable
+sessions config features set sessions_enabled true   # Explicitly enable
+```
+
+**When `sessions_enabled` is false**:
+- All hooks exit immediately without enforcement
+- DAIC mode system is inactive (Edit/Write/MultiEdit tools are not blocked)
+- Trigger phrase detection is disabled
+- Task management workflows are inactive
+- Protocol loading is disabled
+- Sessions API commands remain available for re-enabling
+
+**Use cases for disabling**:
+- Testing code changes without DAIC constraints
+- Quick exploratory work outside task workflows
+- Emergency hotfixes that need immediate implementation
+- Pairing with teammates unfamiliar with DAIC methodology
+- Alternative VCS workflows (Jujutsu, Mercurial) without sessions structure
+
+The statusline displays the disabled state when `sessions_enabled` is false. Re-enable anytime with the same toggle command.
 
 ## Key Patterns
 
@@ -225,9 +282,8 @@ sessions tasks start @<task-name>           # Start task with validation
 - **Subagent Protection**: DAIC reminders suppressed, state editing blocked
 
 ### Update Detection System
-- **Dual-Language Publishing**: Atomic workflow for PyPI and npm
-- **Pre-Flight Validation**: 7 automated checks via prepare-release.py
-- **Version Sync**: check-version-sync.sh ensures consistency
+- **Dual-Language Publishing**: Simultaneous releases to PyPI and npm
+- **Version Sync**: pyproject.toml and package.json version fields must match
 - **Update Detection**: Flag-based caching in STATE.metadata
 - **Agent-Directive Notifications**: Prompts Claude to stop and ask user before any installation
 - **Update Commands**: suppress, check, status operations for user control
@@ -259,6 +315,29 @@ sessions tasks start @<task-name>           # Start task with validation
 - **UTF-8 Encoding**: Explicit encoding prevents cp1252 issues
 - **Native Scripts**: daic.cmd and daic.ps1 for shell compatibility
 - **Path Handling**: Windows-style paths with %CLAUDE_PROJECT_DIR%
+
+## Testing
+
+### Current Status
+No automated test suite yet (package.json shows `"test": "echo \"No test specified yet\""`)
+
+### Manual Testing Workflow
+1. **Install in Development Mode**: Set up symlinked installation in a test repository
+2. **Test DAIC Enforcement**: Attempt writes in discussion mode to verify blocking
+3. **Test Trigger Phrases**: Use various trigger phrases to validate mode transitions
+4. **Test Task Workflows**:
+   - Create tasks with different priorities and types
+   - Start tasks and verify context loading
+   - Complete tasks and verify commit/merge behavior
+5. **Test Sessions API**: Run all `/sessions` commands to verify functionality
+6. **Test Feature Parity**: Verify identical behavior between Python and JavaScript implementations
+7. **Test Platform Compatibility**: Validate on Linux, macOS, and Windows
+
+### Testing Considerations
+- Hook behavior requires full Claude Code session context
+- State persistence should be verified across session restarts
+- Branch enforcement requires git repository with commits
+- Protocol template rendering should be validated with different config options
 
 ## Known Issues
 
@@ -308,12 +387,12 @@ sessions tasks start @<task-name>           # Start task with validation
 
 ## Related Documentation
 
-- **RELEASE.md** - Maintainer guide for version releases
-- **README.md** - User-facing feature overview
-- **docs/INSTALL.md** - Detailed installation instructions
-- **docs/USAGE_GUIDE.md** - Workflow and feature documentation
+- **README.md** - User-facing feature overview and installation guide
+- **CHANGELOG.md** - Version history and release notes
+- **CLAUDE.md** - This file (architecture and development guide)
 - **cc_sessions/knowledge/** - Internal architecture details
-- **sessions/protocols/** - Installed protocol specifications
+- **cc_sessions/protocols/** - Protocol template sources
+- **sessions/protocols/** - Installed protocol specifications (after installation)
 
 ## Integration Points
 

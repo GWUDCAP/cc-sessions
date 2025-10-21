@@ -20,7 +20,8 @@ const {
     SessionsProtocol,
     listOpenTasks,
     TaskState,
-    StateError
+    StateError,
+    loadConfig
 } = require('./shared_state.js');
 ///-///
 
@@ -62,6 +63,12 @@ const cwd = inputData.cwd || "";
 let mod = false;
 
 const STATE = loadState();
+const CONFIG = loadConfig();
+
+// Early exit if sessions are disabled
+if (!CONFIG.features.sessions_enabled) {
+    process.exit(0);
+}
 //-//
 
 /*

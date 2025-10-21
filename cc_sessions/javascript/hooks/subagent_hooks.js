@@ -11,7 +11,7 @@ const path = require('path');
 ///-///
 
 /// ===== LOCAL ===== ///
-const { editState, PROJECT_ROOT, loadState } = require('./shared_state.js');
+const { editState, PROJECT_ROOT, loadState, loadConfig } = require('./shared_state.js');
 ///-///
 
 //-//
@@ -131,6 +131,12 @@ try {
 } catch (e) {
     console.error(`Error: Invalid JSON input: ${e.message}`);
     process.exit(1);
+}
+
+// Load config and check if sessions are enabled
+const CONFIG = loadConfig();
+if (!CONFIG.features.sessions_enabled) {
+    process.exit(0);
 }
 
 // Check if this is a Task tool call

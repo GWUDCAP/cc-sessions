@@ -47,6 +47,11 @@ if (filePathString) {
 const STATE = loadState();
 const CONFIG = loadConfig();
 
+// Early exit if sessions are disabled
+if (!CONFIG.features.sessions_enabled) {
+    process.exit(0);
+}
+
 let command = "";
 let incomingTodos = [];
 if (toolName === "Bash") {

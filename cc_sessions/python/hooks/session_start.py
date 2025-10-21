@@ -23,6 +23,10 @@ sessions_dir = PROJECT_ROOT / 'sessions'
 STATE = None
 CONFIG = load_config()
 
+# Early exit if sessions are disabled
+if not CONFIG.features.sessions_enabled:
+    sys.exit(0)
+
 developer_name = CONFIG.environment.developer_name
 
 # Initialize context

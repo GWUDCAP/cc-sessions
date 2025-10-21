@@ -113,6 +113,7 @@ def format_config_human(config) -> str:
                             f"  Branch Enforcement: {config.features.branch_enforcement}",
                             f"  Task Detection: {config.features.task_detection}",
                             f"  Auto Ultrathink: {config.features.auto_ultrathink}",
+                            f"  Sessions Enabled: {config.features.sessions_enabled}",
                             f"  Icon Style: {get_value(config.features.icon_style)}",
                             f"  Context Warnings (85%): {config.features.context_warnings.warn_85}",
                             f"  Context Warnings (90%): {config.features.context_warnings.warn_90}", ])
@@ -580,6 +581,7 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
                     "branch_enforcement": features.branch_enforcement,
                     "task_detection": features.task_detection,
                     "auto_ultrathink": features.auto_ultrathink,
+                    "sessions_enabled": features.sessions_enabled,
                     "icon_style": get_value(features.icon_style),
                     "warn_85": features.context_warnings.warn_85,
                     "warn_90": features.context_warnings.warn_90,
@@ -591,6 +593,7 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
             f"  branch_enforcement: {features.branch_enforcement}",
             f"  task_detection: {features.task_detection}",
             f"  auto_ultrathink: {features.auto_ultrathink}",
+            f"  sessions_enabled: {features.sessions_enabled}",
             f"  icon_style: {get_value(features.icon_style)}",
             f"  warn_85: {features.context_warnings.warn_85}",
             f"  warn_90: {features.context_warnings.warn_90}",
@@ -605,7 +608,7 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
         value = args[2]
 
         with edit_config() as config:
-            if key in ['task_detection', 'auto_ultrathink', 'branch_enforcement']:
+            if key in ['task_detection', 'auto_ultrathink', 'branch_enforcement', 'sessions_enabled']:
                 # Boolean features
                 bool_value = value.lower() in ['true', '1', 'yes', 'on']
                 setattr(config.features, key, bool_value)
@@ -640,7 +643,7 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
 
         # Get current value
         config = load_config()
-        if key in ['task_detection', 'auto_ultrathink', 'branch_enforcement']:
+        if key in ['task_detection', 'auto_ultrathink', 'branch_enforcement', 'sessions_enabled']:
             current_value = getattr(config.features, key)
         elif key == 'icon_style':
             current_value = config.features.icon_style
@@ -661,7 +664,7 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
 
         # Save the toggled value
         with edit_config() as config:
-            if key in ['task_detection', 'auto_ultrathink', 'branch_enforcement']:
+            if key in ['task_detection', 'auto_ultrathink', 'branch_enforcement', 'sessions_enabled']:
                 setattr(config.features, key, new_value)
             elif key == 'icon_style':
                 config.features.icon_style = new_value
@@ -694,6 +697,7 @@ def format_features_help() -> str:
         "  branch_enforcement  - Git branch validation (default: true)",
         "  task_detection      - Task-based workflow automation (default: true)",
         "  auto_ultrathink     - Enhanced AI reasoning (default: true)",
+        "  sessions_enabled    - Enable/disable all cc-sessions hooks except statusline (default: true)",
         "  icon_style          - Statusline icon style: nerd_fonts, emoji, or ascii (default: nerd_fonts)",
         "  warn_85             - Context warning at 85% (default: true)",
         "  warn_90             - Context warning at 90% (default: true)",

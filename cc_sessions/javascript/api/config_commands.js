@@ -134,6 +134,7 @@ function formatConfigHuman(config) {
         `  Branch Enforcement: ${config.features.branch_enforcement}`,
         `  Task Detection: ${config.features.task_detection}`,
         `  Auto Ultrathink: ${config.features.auto_ultrathink}`,
+        `  Sessions Enabled: ${config.features.sessions_enabled}`,
         `  Icon Style: ${getValue(config.features.icon_style)}`,
         `  Context Warnings (85%): ${config.features.context_warnings.warn_85}`,
         `  Context Warnings (90%): ${config.features.context_warnings.warn_90}`,
@@ -763,6 +764,7 @@ function handleFeaturesCommand(args, jsonOutput = false, fromSlash = false) {
                     branch_enforcement: features.branch_enforcement,
                     task_detection: features.task_detection,
                     auto_ultrathink: features.auto_ultrathink,
+                    sessions_enabled: features.sessions_enabled,
                     icon_style: getValue(features.icon_style),
                     warn_85: features.context_warnings.warn_85,
                     warn_90: features.context_warnings.warn_90,
@@ -775,6 +777,7 @@ function handleFeaturesCommand(args, jsonOutput = false, fromSlash = false) {
             `  branch_enforcement: ${features.branch_enforcement}`,
             `  task_detection: ${features.task_detection}`,
             `  auto_ultrathink: ${features.auto_ultrathink}`,
+            `  sessions_enabled: ${features.sessions_enabled}`,
             `  icon_style: ${getValue(features.icon_style)}`,
             `  warn_85: ${features.context_warnings.warn_85}`,
             `  warn_90: ${features.context_warnings.warn_90}`,
@@ -792,7 +795,7 @@ function handleFeaturesCommand(args, jsonOutput = false, fromSlash = false) {
         let finalValue;
 
         editConfig(config => {
-            if (['task_detection', 'auto_ultrathink', 'branch_enforcement'].includes(key)) {
+            if (['task_detection', 'auto_ultrathink', 'branch_enforcement', 'sessions_enabled'].includes(key)) {
                 // Boolean features
                 const boolValue = ['true', '1', 'yes', 'on'].includes(value.toLowerCase());
                 config.features[key] = boolValue;
@@ -834,7 +837,7 @@ function handleFeaturesCommand(args, jsonOutput = false, fromSlash = false) {
         // Get current value
         const config = loadConfig();
         let currentValue;
-        if (['task_detection', 'auto_ultrathink', 'branch_enforcement'].includes(key)) {
+        if (['task_detection', 'auto_ultrathink', 'branch_enforcement', 'sessions_enabled'].includes(key)) {
             currentValue = config.features[key];
         } else if (key === 'icon_style') {
             currentValue = config.features.icon_style;
@@ -858,7 +861,7 @@ function handleFeaturesCommand(args, jsonOutput = false, fromSlash = false) {
 
         // Save the toggled value
         editConfig(config => {
-            if (['task_detection', 'auto_ultrathink', 'branch_enforcement'].includes(key)) {
+            if (['task_detection', 'auto_ultrathink', 'branch_enforcement', 'sessions_enabled'].includes(key)) {
                 config.features[key] = newValue;
             } else if (key === 'icon_style') {
                 config.features.icon_style = newValue;
@@ -897,6 +900,7 @@ function formatFeaturesHelp() {
         "  branch_enforcement  - Git branch validation (default: true)",
         "  task_detection      - Task-based workflow automation (default: true)",
         "  auto_ultrathink     - Enhanced AI reasoning (default: true)",
+        "  sessions_enabled    - Enable/disable all cc-sessions hooks except statusline (default: true)",
         "  icon_style          - Statusline icon style: nerd_fonts, emoji, or ascii (default: nerd_fonts)",
         "  warn_85             - Context warning at 85% (default: true)",
         "  warn_90             - Context warning at 90% (default: true)",

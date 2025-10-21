@@ -23,6 +23,7 @@ from shared_state import (
     list_open_tasks,
     TaskState,
     StateError,
+    load_config,
 )
 from pathlib import Path
 ##-##
@@ -54,6 +55,11 @@ cwd = input_data.get("cwd", "")
 mod = False
 
 STATE = load_state()
+CONFIG = load_config()
+
+# Early exit if sessions are disabled
+if not CONFIG.features.sessions_enabled:
+    sys.exit(0)
 #-#
 
 """

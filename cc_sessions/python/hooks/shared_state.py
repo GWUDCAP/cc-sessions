@@ -305,6 +305,7 @@ class EnabledFeatures:
     branch_enforcement: bool = True
     task_detection: bool = True
     auto_ultrathink: bool = True
+    sessions_enabled: bool = True
     icon_style: IconStyle = IconStyle.NERD_FONTS
     context_warnings: ContextWarnings = field(default_factory=ContextWarnings)
 
@@ -336,6 +337,7 @@ class EnabledFeatures:
             branch_enforcement=d.get("branch_enforcement", True),
             task_detection=d.get("task_detection", True),
             auto_ultrathink=d.get("auto_ultrathink", True),
+            sessions_enabled=d.get("sessions_enabled", True),
             icon_style=icon_style_value,
             context_warnings=cw
         )
