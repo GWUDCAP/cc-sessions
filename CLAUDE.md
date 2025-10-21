@@ -38,7 +38,7 @@ User preferences in `sessions/sessions-config.json`:
 - **Environment**: developer_name, os, shell
 - **Trigger Phrases**: Customizable for all mode transitions
 - **Git Preferences**: Branch naming, commit styles, auto-merge/push, submodules
-- **Feature Toggles**: branch_enforcement, task_detection, auto_ultrathink, icon_style, context warnings
+- **Feature Toggles**: sessions_enabled, branch_enforcement, task_detection, auto_ultrathink, icon_style, context warnings
 - **Blocking Patterns**: implementation_only_tools, bash_read_patterns, bash_write_patterns
 
 ### Templated Protocols
@@ -198,6 +198,32 @@ sessions tasks start @<task-name>           # Start task with validation
 ### Slash Commands
 - `/sessions` - Unified interface with subsystem routing
 - All commands support `--from-slash` flag for contextual output
+
+### Disabling Sessions
+The entire sessions framework can be toggled on/off using the `sessions_enabled` feature flag:
+
+```bash
+sessions config features toggle sessions_enabled  # Toggle on/off
+sessions config features set sessions_enabled false  # Explicitly disable
+sessions config features set sessions_enabled true   # Explicitly enable
+```
+
+**When `sessions_enabled` is false**:
+- All hooks exit immediately without enforcement
+- DAIC mode system is inactive (Edit/Write/MultiEdit tools are not blocked)
+- Trigger phrase detection is disabled
+- Task management workflows are inactive
+- Protocol loading is disabled
+- Sessions API commands remain available for re-enabling
+
+**Use cases for disabling**:
+- Testing code changes without DAIC constraints
+- Quick exploratory work outside task workflows
+- Emergency hotfixes that need immediate implementation
+- Pairing with teammates unfamiliar with DAIC methodology
+- Alternative VCS workflows (Jujutsu, Mercurial) without sessions structure
+
+The statusline displays the disabled state when `sessions_enabled` is false. Re-enable anytime with the same toggle command.
 
 ## Key Patterns
 
