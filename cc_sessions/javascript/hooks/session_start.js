@@ -21,6 +21,12 @@ const { editState, PROJECT_ROOT, loadConfig, SessionsProtocol, getTaskFilePath, 
 const sessionsDir = path.join(PROJECT_ROOT, 'sessions');
 let STATE = null;
 const CONFIG = loadConfig();
+
+// Early exit if sessions are disabled
+if (!CONFIG.features.sessions_enabled) {
+    process.exit(0);
+}
+
 const developerName = CONFIG.environment?.developer_name || 'developer';
 
 // Initialize context

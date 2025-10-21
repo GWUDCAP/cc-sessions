@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 ##-##
 
 ## ===== LOCAL ===== ##
-from shared_state import edit_state, PROJECT_ROOT
+from shared_state import edit_state, PROJECT_ROOT, load_config
 ##-##
 
 #-#
@@ -123,6 +123,11 @@ if is_ci_environment():
 # Load input from stdin
 try: input_data = json.load(sys.stdin)
 except json.JSONDecodeError as e: print(f"Error: Invalid JSON input: {e}", file=sys.stderr); sys.exit(1)
+
+# Load config and check if sessions are enabled
+CONFIG = load_config()
+if not CONFIG.features.sessions_enabled:
+    sys.exit(0)
 
 # Check if this is a Task tool call
 tool_name = input_data.get("tool_name", "")

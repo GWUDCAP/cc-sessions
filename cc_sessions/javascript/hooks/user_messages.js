@@ -63,6 +63,11 @@ const transcriptPath = inputData.transcript_path || "";
 const STATE = loadState();
 const CONFIG = loadConfig();
 
+// Early exit if sessions are disabled
+if (!CONFIG.features.sessions_enabled) {
+    process.exit(0);
+}
+
 // Check if this is a slash command we handle via API
 const promptStripped = prompt.trim();
 const apiCommands = ['/mode', '/state', '/config', '/add-trigger', '/remove-trigger'];

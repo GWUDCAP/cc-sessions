@@ -19,7 +19,7 @@ from pathlib import Path
 HOOKS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = HOOKS_DIR.parent.parent
 sys.path.insert(0, str(HOOKS_DIR))
-from shared_state import load_state, edit_state
+from shared_state import load_state, edit_state, load_config
 ##-##
 
 #-#
@@ -88,6 +88,11 @@ Handles onboarding flow for users who chose kickstart in installer:
 
 #!> 1. Load state and check kickstart metadata
 STATE = load_state()
+CONFIG = load_config()
+
+# Early exit if sessions are disabled
+if not CONFIG.features.sessions_enabled:
+    sys.exit(0)
 
 # Get kickstart metadata (should ALWAYS exist if this hook is running)
 kickstart_meta = STATE.metadata.get('kickstart')

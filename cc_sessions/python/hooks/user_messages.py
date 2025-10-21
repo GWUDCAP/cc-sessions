@@ -53,6 +53,10 @@ transcript_path = input_data.get("transcript_path", "")
 STATE = load_state()
 CONFIG = load_config()
 
+# Early exit if sessions are disabled
+if not CONFIG.features.sessions_enabled:
+    sys.exit(0)
+
 # Check if this is a slash command we handle via API
 prompt_stripped = prompt.strip()
 api_commands = ['/mode', '/state', '/config', '/add-trigger', '/remove-trigger']

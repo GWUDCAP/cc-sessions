@@ -318,6 +318,7 @@ class EnabledFeatures {
         this.branch_enforcement = data.branch_enforcement !== undefined ? data.branch_enforcement : true;
         this.task_detection = data.task_detection !== undefined ? data.task_detection : true;
         this.auto_ultrathink = data.auto_ultrathink !== undefined ? data.auto_ultrathink : true;
+        this.sessions_enabled = data.sessions_enabled !== undefined ? data.sessions_enabled : true;
 
         // Handle migration from old use_nerd_fonts boolean to new icon_style enum
         let iconStyleValue = data.icon_style;

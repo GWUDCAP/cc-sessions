@@ -30,6 +30,10 @@ if file_path_string: file_path = Path(file_path_string)
 STATE = load_state()
 CONFIG = load_config()
 
+# Early exit if sessions are disabled
+if not CONFIG.features.sessions_enabled:
+    sys.exit(0)
+
 if tool_name == "Bash": command = tool_input.get("command", "").strip()
 if tool_name == "TodoWrite": incoming_todos = tool_input.get("todos", [])
 

@@ -13,7 +13,7 @@ const path = require('path');
 /// ===== LOCAL ===== ///
 // Import from shared_state (same pattern as normal hooks). Runtime file lives in sessions/hooks
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
-const { loadState, editState } = require('./shared_state.js');
+const { loadState, editState, loadConfig } = require('./shared_state.js');
 ///-///
 
 //-//
@@ -88,6 +88,12 @@ Handles onboarding flow for users who chose kickstart in installer:
 
 //!> 1. Load state and check kickstart metadata
 const STATE = loadState();
+const CONFIG = loadConfig();
+
+// Early exit if sessions are disabled
+if (!CONFIG.features.sessions_enabled) {
+    process.exit(0);
+}
 
 // Get kickstart metadata (should ALWAYS exist if this hook is running)
 const kickstartMeta = STATE.metadata?.kickstart;
