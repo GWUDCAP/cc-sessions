@@ -294,12 +294,9 @@ else: bar_color = red
 #!> Construct progress bar string
 # Build progress bar string
 progress_bar = []
-if icon_style == IconStyle.NERD_FONTS:
-    context_icon = "󱃖 "
-elif icon_style == IconStyle.EMOJI:
-    context_icon = ""
-else:  # ASCII
-    context_icon = ""
+if icon_style == IconStyle.NERD_FONTS: context_icon = "󱃖 "
+elif icon_style == IconStyle.EMOJI: context_icon = ""
+else: context_icon = ""
 progress_bar.append(f"{reset}{l_gray}{context_icon} ")
 progress_bar.append(bar_color + ("█" * filled_blocks))
 progress_bar.append(gray + ("░" * empty_blocks))
