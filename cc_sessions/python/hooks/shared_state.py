@@ -5,7 +5,7 @@
 ## ===== STDLIB ===== ##
 from __future__ import annotations
 
-from typing import Optional, List, Dict, Any, Iterator, Literal, Union
+from typing import Optional, List, Dict, Any, Iterator, Literal, Union, ClassVar
 from importlib.metadata import version, PackageNotFoundError
 from dataclasses import dataclass, asdict, field
 from contextlib import contextmanager, suppress
@@ -308,29 +308,68 @@ class EnabledFeatures:
     icon_style: IconStyle = IconStyle.NERD_FONTS
     context_warnings: ContextWarnings = field(default_factory=ContextWarnings)
 
+    # Common aliases users may type when configuring icon styles
+    ICON_STYLE_ALIASES: ClassVar[Dict[str, IconStyle]] = {
+        "nerdfonts": IconStyle.NERD_FONTS,
+        "nerd_fonts": IconStyle.NERD_FONTS,
+        "nerd-fonts": IconStyle.NERD_FONTS,
+        "default": IconStyle.NERD_FONTS,
+        "emoji": IconStyle.EMOJI,
+        "emojis": IconStyle.EMOJI,
+        "ascii": IconStyle.ASCII,
+        "plain": IconStyle.ASCII,
+        "text": IconStyle.ASCII,
+    }
+
+    @classmethod
+    def normalize_icon_style(cls, value: Any) -> tuple[IconStyle, bool, bool]:
+        """Normalize icon style values.
+
+        Returns (icon_style, changed, recognized).
+        """
+        if isinstance(value, IconStyle):
+            return value, False, True
+
+        if value is None:
+            return IconStyle.NERD_FONTS, False, True
+
+        if isinstance(value, bool):
+            return (IconStyle.NERD_FONTS if value else IconStyle.ASCII), True, True
+
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned:
+                return IconStyle.NERD_FONTS, True, False
+
+            lowered = cleaned.lower()
+            normalized = lowered.replace("-", "_").replace(" ", "_")
+            if normalized in cls.ICON_STYLE_ALIASES:
+                icon = cls.ICON_STYLE_ALIASES[normalized]
+                return icon, icon.value != lowered, True
+
+            try:
+                icon = IconStyle(normalized)
+                return icon, icon.value != lowered, True
+            except ValueError:
+                return IconStyle.NERD_FONTS, True, False
+
+        return IconStyle.NERD_FONTS, True, False
+
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "EnabledFeatures":
         cw_data = d.get("context_warnings", {})
         if cw_data and isinstance(cw_data, dict): cw = ContextWarnings(**cw_data)
         else: cw = ContextWarnings()
 
-        # Handle migration from old use_nerd_fonts boolean to new icon_style enum
-        icon_style_value = d.get("icon_style")
-        if icon_style_value is None:
-            # Check for old boolean field
-            old_use_nerd_fonts = d.get("use_nerd_fonts")
-            if old_use_nerd_fonts is not None:
-                # Migrate: True -> NERD_FONTS, False -> ASCII
-                icon_style_value = IconStyle.NERD_FONTS if old_use_nerd_fonts else IconStyle.ASCII
-            else:
-                # No old or new field, use default
-                icon_style_value = IconStyle.NERD_FONTS
-        elif isinstance(icon_style_value, str):
-            # Convert string to enum
-            try:
-                icon_style_value = IconStyle(icon_style_value)
-            except ValueError:
-                icon_style_value = IconStyle.NERD_FONTS
+        icon_source = None
+        if "icon_style" in d:
+            icon_source = d["icon_style"]
+        elif "use_nerd_fonts" in d:
+            icon_source = d["use_nerd_fonts"]
+
+        icon_style_value, _, recognized = cls.normalize_icon_style(icon_source)
+        if not recognized:
+            icon_style_value = IconStyle.NERD_FONTS
 
         return cls(
             branch_enforcement=d.get("branch_enforcement", True),
@@ -867,8 +906,19 @@ def load_config() -> SessionsConfig:
 
     # Check if migration is needed from use_nerd_fonts to icon_style
     needs_migration = False
-    if "features" in data and "use_nerd_fonts" in data["features"] and "icon_style" not in data["features"]:
-        needs_migration = True
+    features_data = data.get("features", {}) if isinstance(data, dict) else {}
+    icon_source = None
+    if isinstance(features_data, dict):
+        if "icon_style" in features_data:
+            icon_source = features_data["icon_style"]
+        if "use_nerd_fonts" in features_data and "icon_style" not in features_data:
+            needs_migration = True
+            icon_source = features_data["use_nerd_fonts"]
+
+    if icon_source is not None:
+        _, icon_changed, icon_recognized = EnabledFeatures.normalize_icon_style(icon_source)
+        if icon_changed or not icon_recognized:
+            needs_migration = True
 
     config = SessionsConfig.from_dict(data)
 

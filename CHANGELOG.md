@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Accept aliases like `nerd-fonts` when setting the statusline icon style through `sessions config features`. This makes the CLI friendlier by matching the terminology used in docs and installer prompts.
+
+### Fixed
+- Toggling `icon_style` now works even if legacy configs store the value as a plain string or boolean, ensuring seamless upgrades without manual file edits.
+
 ## [0.3.6] - 2025-10-17
 
 ### Fixed

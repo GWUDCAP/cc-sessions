@@ -464,6 +464,37 @@ function main() {
         line2Parts.push(gitBranchInfo);
     }
     console.log(line2Parts.join(' | '));
+
+    // Line 3 - Trigger phrase cheat sheet
+    const triggerConfig = config?.trigger_phrases || {};
+    const defaultTriggers = {
+        implementation_mode: ['yert'],
+        discussion_mode: ['SILENCE'],
+        task_creation: ['mek:'],
+        task_startup: ['start^'],
+        task_completion: ['finito'],
+        context_compaction: ['squish']
+    };
+
+    const triggerGroups = [
+        { key: 'implementation_mode', label: 'Go', color: green },
+        { key: 'discussion_mode', label: 'No', color: purple },
+        { key: 'task_creation', label: 'Create', color: cyan },
+        { key: 'task_startup', label: 'Start', color: orange },
+        { key: 'task_completion', label: 'Complete', color: red },
+        { key: 'context_compaction', label: 'Compact', color: lGray }
+    ];
+
+    const formattedTriggers = triggerGroups.map(({ key, label, color }) => {
+        const phrases = Array.isArray(triggerConfig[key])
+            ? triggerConfig[key]
+            : defaultTriggers[key];
+        const phraseText = phrases && phrases.length ? phrases.join(', ') : '—';
+        return `${color}${label}:${reset} ${lGray}${phraseText}${reset}`;
+    });
+
+    const triggerLabel = `${purple}Triggers:${reset}`;
+    console.log(`${triggerLabel} ${formattedTriggers.join(` ${gray}|${reset} `)}`);
 }
 
 if (require.main === module) {

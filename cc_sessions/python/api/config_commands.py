@@ -11,7 +11,18 @@ import json
 ##-##
 
 ## ===== LOCAL ===== ##
-from hooks.shared_state import load_config, edit_config, TriggerCategory, GitAddPattern, GitCommitStyle, UserOS, UserShell, CCTools, IconStyle
+from hooks.shared_state import (
+    load_config,
+    edit_config,
+    TriggerCategory,
+    GitAddPattern,
+    GitCommitStyle,
+    UserOS,
+    UserShell,
+    CCTools,
+    IconStyle,
+    EnabledFeatures,
+)
 ##-##
 
 #-#
@@ -612,12 +623,14 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
                 final_value = bool_value
 
             elif key == 'icon_style':
-                # Enum feature - accepts nerd_fonts, emoji, ascii
-                try:
-                    config.features.icon_style = IconStyle(value.lower())
-                    final_value = value.lower()
-                except ValueError:
-                    raise ValueError(f"Invalid icon_style value: {value}. Valid values: nerd_fonts, emoji, ascii")
+                # Enum feature - accepts nerd_fonts, emoji, ascii (+ aliases)
+                icon_style, _, recognized = EnabledFeatures.normalize_icon_style(value)
+                if not recognized:
+                    raise ValueError(
+                        f"Invalid icon_style value: {value}. Valid values: nerd_fonts, nerd-fonts, emoji, ascii"
+                    )
+                config.features.icon_style = icon_style
+                final_value = icon_style.value
 
             elif key in ['warn_85', 'warn_90']:
                 # Context warning features
@@ -652,8 +665,11 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
         # Toggle/cycle the value
         if key == 'icon_style':
             # Cycle through enum values: nerd_fonts -> emoji -> ascii -> nerd_fonts
+            current_style, _, recognized = EnabledFeatures.normalize_icon_style(current_value)
+            if not recognized:
+                current_style = IconStyle.NERD_FONTS
             cycle = [IconStyle.NERD_FONTS, IconStyle.EMOJI, IconStyle.ASCII]
-            current_idx = cycle.index(current_value)
+            current_idx = cycle.index(current_style)
             new_value = cycle[(current_idx + 1) % len(cycle)]
         else:
             # Boolean toggle
@@ -669,8 +685,12 @@ def handle_features_command(args: List[str], json_output: bool = False, from_sla
                 setattr(config.features.context_warnings, key, new_value)
 
         # Format values for display
-        old_display = current_value.value if hasattr(current_value, 'value') else current_value
-        new_display = new_value.value if hasattr(new_value, 'value') else new_value
+        if key == 'icon_style':
+            old_display = current_style.value
+            new_display = new_value.value
+        else:
+            old_display = current_value
+            new_display = new_value
 
         if json_output:
             return {"toggled": key, "old_value": old_display, "new_value": new_display}
@@ -694,7 +714,7 @@ def format_features_help() -> str:
         "  branch_enforcement  - Git branch validation (default: true)",
         "  task_detection      - Task-based workflow automation (default: true)",
         "  auto_ultrathink     - Enhanced AI reasoning (default: true)",
-        "  icon_style          - Statusline icon style: nerd_fonts, emoji, or ascii (default: nerd_fonts)",
+        "  icon_style          - Statusline icon style: nerd_fonts (aka nerd-fonts), emoji, or ascii (default: nerd_fonts)",
         "  warn_85             - Context warning at 85% (default: true)",
         "  warn_90             - Context warning at 90% (default: true)",
         "",
