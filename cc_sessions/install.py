@@ -1865,7 +1865,7 @@ def configure_settings(project_root: Path):
                     {
                         'type': 'command',
                         'command': 'python "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\user_messages.py"' if is_windows
-                                 else 'python $CLAUDE_PROJECT_DIR/sessions/hooks/user_messages.py'
+                                 else 'python "$CLAUDE_PROJECT_DIR/sessions/hooks/user_messages.py"'
                     }
                 ]
             }
@@ -1877,7 +1877,7 @@ def configure_settings(project_root: Path):
                     {
                         'type': 'command',
                         'command': 'python "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\sessions_enforce.py"' if is_windows
-                                 else 'python $CLAUDE_PROJECT_DIR/sessions/hooks/sessions_enforce.py'
+                                 else 'python "$CLAUDE_PROJECT_DIR/sessions/hooks/sessions_enforce.py"'
                     }
                 ]
             },
@@ -1887,7 +1887,7 @@ def configure_settings(project_root: Path):
                     {
                         'type': 'command',
                         'command': 'python "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\subagent_hooks.py"' if is_windows
-                                 else 'python $CLAUDE_PROJECT_DIR/sessions/hooks/subagent_hooks.py'
+                                 else 'python "$CLAUDE_PROJECT_DIR/sessions/hooks/subagent_hooks.py"'
                     }
                 ]
             }
@@ -1898,7 +1898,7 @@ def configure_settings(project_root: Path):
                     {
                         'type': 'command',
                         'command': 'python "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\post_tool_use.py"' if is_windows
-                                 else 'python $CLAUDE_PROJECT_DIR/sessions/hooks/post_tool_use.py'
+                                 else 'python "$CLAUDE_PROJECT_DIR/sessions/hooks/post_tool_use.py"'
                     }
                 ]
             }
@@ -1910,7 +1910,7 @@ def configure_settings(project_root: Path):
                     {
                         'type': 'command',
                         'command': 'python "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\kickstart_session_start.py"' if is_windows
-                                 else 'python $CLAUDE_PROJECT_DIR/sessions/hooks/kickstart_session_start.py'
+                                 else 'python "$CLAUDE_PROJECT_DIR/sessions/hooks/kickstart_session_start.py"'
                     }
                 ]
             }
@@ -2635,7 +2635,7 @@ def _ask_statusline():
 
         # Use Windows or Unix path syntax based on platform
         is_windows = sys.platform == 'win32'
-        statusline_cmd = 'python "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.py"' if is_windows else 'python $CLAUDE_PROJECT_DIR/sessions/statusline.py'
+        statusline_cmd = 'python "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.py"' if is_windows else 'python "$CLAUDE_PROJECT_DIR/sessions/statusline.py"'
 
         settings['statusLine'] = {'type': 'command', 'command': statusline_cmd}
         with open(settings_file, 'w') as f: json.dump(settings, f, indent=2)
@@ -2644,7 +2644,7 @@ def _ask_statusline():
     else:
         # Show platform-appropriate example
         is_windows = sys.platform == 'win32'
-        example_cmd = 'python "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.py"' if is_windows else 'python $CLAUDE_PROJECT_DIR/sessions/statusline.py'
+        example_cmd = 'python "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.py"' if is_windows else 'python "$CLAUDE_PROJECT_DIR/sessions/statusline.py"'
 
         set_info([  color('You can add the cc-sessions statusline later by adding this to .claude/settings.json:', Colors.YELLOW),
                     color('{',Colors.YELLOW), color('  "statusLine": {',Colors.YELLOW), color('    "type": "command",',Colors.YELLOW),
