@@ -1778,14 +1778,14 @@ function configure_settings(project_root) {
   let settings = get_settings(project_root);
   const is_windows = process.platform === 'win32';
   const sessions_hooks = {
-    'UserPromptSubmit': [ { hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\user_messages.js"' : 'node $CLAUDE_PROJECT_DIR/sessions/hooks/user_messages.js' } ] } ],
+    'UserPromptSubmit': [ { hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\user_messages.js"' : 'node "$CLAUDE_PROJECT_DIR/sessions/hooks/user_messages.js"' } ] } ],
     'PreToolUse': [
-      { matcher: 'Write|Edit|MultiEdit|Task|Bash|TodoWrite|NotebookEdit', hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\sessions_enforce.js"' : 'node $CLAUDE_PROJECT_DIR/sessions/hooks/sessions_enforce.js' } ] },
-      { matcher: 'Task', hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\subagent_hooks.js"' : 'node $CLAUDE_PROJECT_DIR/sessions/hooks/subagent_hooks.js' } ] },
+      { matcher: 'Write|Edit|MultiEdit|Task|Bash|TodoWrite|NotebookEdit', hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\sessions_enforce.js"' : 'node "$CLAUDE_PROJECT_DIR/sessions/hooks/sessions_enforce.js"' } ] },
+      { matcher: 'Task', hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\subagent_hooks.js"' : 'node "$CLAUDE_PROJECT_DIR/sessions/hooks/subagent_hooks.js"' } ] },
     ],
-    'PostToolUse': [ { hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\post_tool_use.js"' : 'node $CLAUDE_PROJECT_DIR/sessions/hooks/post_tool_use.js' } ] } ],
+    'PostToolUse': [ { hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\post_tool_use.js"' : 'node "$CLAUDE_PROJECT_DIR/sessions/hooks/post_tool_use.js"' } ] } ],
     // Install kickstart SessionStart hook initially; will be replaced if skipping
-    'SessionStart': [ { matcher: 'startup|clear', hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\kickstart_session_start.js"' : 'node $CLAUDE_PROJECT_DIR/sessions/hooks/kickstart_session_start.js' } ] } ],
+    'SessionStart': [ { matcher: 'startup|clear', hooks: [ { type: 'command', command: is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\hooks\\kickstart_session_start.js"' : 'node "$CLAUDE_PROJECT_DIR/sessions/hooks/kickstart_session_start.js"' } ] } ],
   };
   if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
 
@@ -2469,7 +2469,7 @@ async function _ask_statusline() {
 
     // Use Windows or Unix path syntax based on platform
     const is_windows = process.platform === 'win32';
-    const statusline_cmd = is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.js"' : 'node $CLAUDE_PROJECT_DIR/sessions/statusline.js';
+    const statusline_cmd = is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.js"' : 'node "$CLAUDE_PROJECT_DIR/sessions/statusline.js"';
 
     settings.statusLine = { type: 'command', command: statusline_cmd };
     fs.writeFileSync(settings_file, JSON.stringify(settings, null, 2));
@@ -2477,7 +2477,7 @@ async function _ask_statusline() {
   } else {
     // Show platform-appropriate example
     const is_windows = process.platform === 'win32';
-    const example_cmd = is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.js"' : 'node $CLAUDE_PROJECT_DIR/sessions/statusline.js';
+    const example_cmd = is_windows ? 'node "%CLAUDE_PROJECT_DIR%\\sessions\\statusline.js"' : 'node "$CLAUDE_PROJECT_DIR/sessions/statusline.js"';
 
     set_info([
       color('You can add the cc-sessions statusline later by adding this to .claude/settings.json:', Colors.YELLOW),
