@@ -240,19 +240,24 @@ if not is_api_command and task_creation_detected:
     # Format protocol with template variables
     if protocol_content: protocol_content = protocol_content.format(**template_vars)
 
-    with edit_state() as s: 
+    with edit_state() as s:
         s.mode = Mode.GO; s.active_protocol = SessionsProtocol.CREATE
         if s.todos.active: had_active_todos = True; s.todos.stash_active()
         s.todos.active = todos
         STATE = s
 
-    context += "[Task Creation Notice]\n"
+    context += "⚠️⚠️⚠️ [TASK CREATION - NOT TASK IMPLEMENTATION] ⚠️⚠️⚠️\n\n"
+    context += "**YOU ARE NOT IMPLEMENTING THE TASK THE USER DESCRIBED**\n\n"
+    context += "You are creating a TASK FILE (metadata) for work that will be done LATER.\n"
+    context += "Do NOT write any code related to the user's description.\n"
+    context += "Do NOT start implementing features.\n"
+    context += "You are ONLY creating the task file, gathering context, and updating indexes.\n\n"
 
     if protocol_content:
-        context += f"User triggered task creation. Protocol:\n{protocol_content}\n"
+        context += f"Protocol:\n{protocol_content}\n"
     else:
         # Fallback to old behavior if protocol not found
-        context += f"User triggered task creation. Read sessions/protocols/task-creation.md\n"
+        context += f"Read sessions/protocols/task-creation.md\n"
 
     if had_active_todos:
         context += "\nYour previous todos have been stashed and will be restored after task creation is complete.\n"

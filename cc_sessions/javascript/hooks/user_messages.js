@@ -317,13 +317,18 @@ if (!isApiCommand && taskCreationDetected) {
         s.todos.active = todos;
     });
 
-    context += "[Task Creation Notice]\n";
+    context += "⚠️⚠️⚠️ [TASK CREATION - NOT TASK IMPLEMENTATION] ⚠️⚠️⚠️\n\n";
+    context += "**YOU ARE NOT IMPLEMENTING THE TASK THE USER DESCRIBED**\n\n";
+    context += "You are creating a TASK FILE (metadata) for work that will be done LATER.\n";
+    context += "Do NOT write any code related to the user's description.\n";
+    context += "Do NOT start implementing features.\n";
+    context += "You are ONLY creating the task file, gathering context, and updating indexes.\n\n";
 
     if (protocolContent) {
-        context += `User triggered task creation. Protocol:\n${protocolContent}\n`;
+        context += `Protocol:\n${protocolContent}\n`;
     } else {
         // Fallback to old behavior if protocol not found
-        context += "User triggered task creation. Read sessions/protocols/task-creation.md\n";
+        context += "Read sessions/protocols/task-creation.md\n";
     }
 
     if (hadActiveTodos) {

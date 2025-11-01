@@ -1,5 +1,16 @@
 # Task Creation Protocol
 
+**⚠️ CRITICAL FRAMING: YOU ARE NOT DOING THE TASK ⚠️**
+
+You are creating METADATA about a task that will be done later. You are NOT implementing anything from the user's description. You are ONLY:
+1. Creating a task file with proper naming
+2. Recording success criteria
+3. Running context-gathering agent
+4. Updating task indexes
+5. Committing the task file
+
+**The actual work described by the user will happen LATER when they start this task.**
+
 {todos}
 
 ## Creating a Task
@@ -203,8 +214,11 @@ Once the task file has been created and the context-gathering agent has populate
 
 1. Inform the user that the task has been successfully created
 2. Show the task file path: `sessions/tasks/[priority]-[task-name].md`
-3. **DO NOT start working on the task** - The task has been created but will remain in 'pending' status
-4. The task will not be started now unless the user explicitly asks to begin work on it
-5. If the user wants to start the task, they should use the task startup protocol
+3. **⚠️ STOP - DO NOT START WORKING ON THE TASK ⚠️**
+   - The task has been created but will remain in 'pending' status
+   - You have NOT implemented anything yet
+   - You have ONLY created the task file and metadata
+   - The user will start this task later using the task startup protocol
+4. Return to discussion mode and await further instructions
 
-This completes the task creation protocol. The task is now ready to be started at a future time.
+**Remember: Task creation is NOT task implementation. The work described in the task file happens later, not now.**
