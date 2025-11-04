@@ -254,8 +254,14 @@ def list_open_tasks_grouped() -> str:
 
 # ===== EXECUTION ===== #
 
+# Skip session start hook in CI environments BEFORE clearing state
+if is_ci_environment():
+    output = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "[CI DETECTED] Skipping session start hook"}}
+    print(json.dumps(output))
+    sys.exit(0)
+
 #!> 1. Clear flags and todos for new session
-with edit_state() as s: 
+with edit_state() as s:
     s.flags.clear_flags()
     s.todos.clear_active()
     restored = s.todos.restore_stashed()
@@ -447,10 +453,6 @@ This notification will appear on every session start until they update or suppre
 #!<
 
 #-#
-
-# Skip session start hook in CI environments
-if is_ci_environment():
-    sys.exit(0)
 
 output = {
     "hookSpecificOutput": {
