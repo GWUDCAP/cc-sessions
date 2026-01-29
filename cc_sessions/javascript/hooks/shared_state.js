@@ -104,7 +104,13 @@ const CCTools = {
     WEBFETCH: 'WebFetch',
     TASK: 'Task',
     TODOWRITE: 'TodoWrite',
-    EXITPLANMODE: 'ExitPlanMode'
+    EXITPLANMODE: 'ExitPlanMode',
+    SKILL: 'Skill',
+    TASKCREATE: 'TaskCreate',
+    TASKUPDATE: 'TaskUpdate',
+    TASKGET: 'TaskGet',
+    TASKLIST: 'TaskList',
+    ASKUSERQUESTION: 'AskUserQuestion'
 };
 
 const SessionsProtocol = {
@@ -251,16 +257,18 @@ class BlockingPatterns {
                 return tool;
             }
         }
-        throw new Error(`Unknown tool: ${tool}`);
+        return null; // unknown tools handled gracefully
     }
 
     isToolBlocked(tool) {
         if (typeof tool === 'string') tool = this._coaxCCTool(tool);
+        if (tool === null) return false;
         return this.implementation_only_tools.includes(tool);
     }
 
     addBlockedTool(tool) {
         if (typeof tool === 'string') tool = this._coaxCCTool(tool);
+        if (tool === null) return false;
         if (this.implementation_only_tools.includes(tool)) return false;
         this.implementation_only_tools.push(tool);
         return true;

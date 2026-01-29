@@ -353,6 +353,15 @@ async function main() {
         s.flags.clearFlags();
         s.todos.clearActive();
         const restored = s.todos.restoreStashed();
+
+        // Orphaned protocol cleanup
+        if (s.active_protocol && s.todos.active.length === 0) {
+            const orphaned = s.active_protocol;
+            s.active_protocol = null;
+            s.mode = 'discussion';
+            context += `Cleaned up orphaned protocol: ${orphaned}\n`;
+        }
+
         STATE = s;
 
         context += "Cleared session flags and active todos for new session.\n\n";

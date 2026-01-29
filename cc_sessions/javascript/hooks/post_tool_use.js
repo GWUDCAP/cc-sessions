@@ -112,7 +112,7 @@ if (toolName === "Task" && STATE.flags.subagent) {
 //!<
 
 //!> Todo completion
-if (STATE.mode === Mode.GO && toolName === "TodoWrite" && STATE.todos.allComplete()) {
+if (STATE.mode === Mode.GO && (toolName === "TodoWrite" || toolName === "TaskUpdate") && STATE.todos.allComplete()) {
     // Check if all complete (names already verified to match if active_todos existed)
     console.error("[DAIC: Todos Complete] All todos completed.\n\n");
 
